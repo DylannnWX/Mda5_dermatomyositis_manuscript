@@ -1,0 +1,3 @@
+Hi there,
+
+This script utilizes HMS's O2 cloud computing platform and maps FASTQ reads to Hg38 reference using STAR, splice-aware mode. Here the inputs and paired-end reads. 
