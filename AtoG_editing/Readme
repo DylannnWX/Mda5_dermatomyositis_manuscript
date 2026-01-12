@@ -1,0 +1,1 @@
+Here documents the quantification of AtoG editing. Briefly, SNP files were called using bcf tools, and SNP sites were converted to .bed files using python scripts. The .bed files were used to extract regions of interest (e.g. LINE regions) for SNP stats. 
