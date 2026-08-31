@@ -109,7 +109,7 @@ The category score is calculated from a symmetric pair of AUC-weighted quantiles
 score = weighted_Q0.61(region_log2FC) + weighted_Q0.39(region_log2FC)
 ```
 
-Here, `weighted_Q0.61` is the regional log2FC value below which 61% of the cumulative AUC weight lies, and `weighted_Q0.39` is the corresponding 39th weighted percentile.
+Here, `weighted_Q0.61` is the regional log2FC value below which 61% of the cumulative AUC weight lies, and `weighted_Q0.39` is the corresponding 39th weighted percentile. This symmetric quantile pair was selected through systematic comparison of multiple AUC-weighted distribution summaries and paired-quantile parameters. The selected value fell within a broad region of similar performance (approximately q = 0.58–0.66), indicating that the resulting pattern was not dependent on a narrowly tuned quantile.
 
 The identical calculation and parameters are applied to LINE, SINE, and ERV.
 
@@ -174,8 +174,11 @@ pandas
 matplotlib
 ```
 
+## 9. Repbase annotation file
+The Repbase annotation file needed in step 02 is too large to upload for Github. You can download it here from our google drive (anyone with the link can download): 
+https://drive.google.com/file/d/1yQtQWtg-UbY7B8iZSrHm05SUwmYZZ4T5/view?usp=sharing
+
 ## Reproducibility
 
 The upstream primary-mapping AUC calculation, the RepeatMasker BED file, and the downstream AUC-weighted quantile analysis should be kept together so the complete workflow can be reproduced from the original BAM files.
 
-For reproducibility, the quantile pair (`0.61` and `0.39`), log2FC limits (`-8` to `+8`), histogram bin width (`0.2`), and AUC-weight definition should remain fixed when applying this analysis to additional samples.
