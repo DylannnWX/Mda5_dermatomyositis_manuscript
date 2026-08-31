@@ -1,6 +1,6 @@
-# Primary-mapping RepeatMasker AUC and TE AuC-weighed Log2FC analysis
+# Primary-mapping RepeatMasker AUC and AUC-weighted analysis
 
-This workflow quantifies RepeatMasker-region signal from primary-mapped reads and summarizes LINE, SINE, and ERV changes from the distribution of region-level log2 fold changes.
+This workflow quantifies RepeatMasker-region signal from primary-mapped reads and summarizes LINE, SINE, and ERV changes from the AUC-weighted distribution of region-level log2 fold changes.
 
 ## 1. Region-level AUC tables
 
@@ -103,15 +103,17 @@ weight = (patient_AUC + HC_AUC) / 2
 
 For each sample and TE category, the weighted distribution of region-level log2FC is accumulated from `-8` to `+8` using 0.2-log2FC bins.
 
-The category score is:
+The category score is calculated from a symmetric pair of AUC-weighted quantiles:
 
 ```text
 score = weighted_Q0.61(region_log2FC) + weighted_Q0.39(region_log2FC)
 ```
 
-This is a tail-asymmetry/distribution-asymmetry score derived from regional log2 fold changes. It is not a conventional class-level log2 fold change.
+Here, `weighted_Q0.61` is the regional log2FC value below which 61% of the cumulative AUC weight lies, and `weighted_Q0.39` is the corresponding 39th weighted percentile.
 
 The identical calculation and parameters are applied to LINE, SINE, and ERV.
+
+The resulting value is referred to as the **AUC-weighted log2FC quantile score**. It is derived from regional log2 fold changes and should not be interpreted as a conventional class-level log2 fold change.
 
 ## 5. Heatmap
 
@@ -154,11 +156,11 @@ The analysis checks for ambiguous cases in which both naming styles exist for th
 The Jupyter analysis writes:
 
 ```text
-AuC_out/tail_asym_q061/
-├── plasma.tail_asym_q0.61.tsv
-├── PBMC.tail_asym_q0.61.tsv
-├── all_samples.tail_asym_q0.61.tsv
-└── plasma_PBMC.tail_asym_q0.61.heatmap.png
+AuC_out/AUC_weighted_quantile/
+├── plasma.AUC_weighted_quantile_score.tsv
+├── PBMC.AUC_weighted_quantile_score.tsv
+├── all_samples.AUC_weighted_quantile_score.tsv
+└── plasma_PBMC.AUC_weighted_quantile_score.heatmap.png
 ```
 
 The TSV files contain the numerical scores used for downstream analysis. Negative values are retained in these tables even though they are displayed as white in the red-only heatmap.
@@ -174,4 +176,6 @@ matplotlib
 
 ## Reproducibility
 
-The upstream primary-mapping AUC calculation and downstream distribution-based summary should be kept together with the RepeatMasker BED file used for the analysis so that the complete workflow can be reproduced from the original BAM files.
+The upstream primary-mapping AUC calculation, the RepeatMasker BED file, and the downstream AUC-weighted quantile analysis should be kept together so the complete workflow can be reproduced from the original BAM files.
+
+For reproducibility, the quantile pair (`0.61` and `0.39`), log2FC limits (`-8` to `+8`), histogram bin width (`0.2`), and AUC-weight definition should remain fixed when applying this analysis to additional samples.
