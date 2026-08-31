@@ -1,0 +1,174 @@
+module load gcc/14.2.0
+module load samtools/1.21
+module load bedtools/2.31.0
+
+ANNOT="Repeatmasker_IGV_magic_L1.bed"
+
+mkdir -p mapq10_bam
+mkdir -p L1_read_counts
+
+
+# ============================================================
+# 1. Extract LINE/L1 RepeatMasker regions
+#    Keep the original first 6 BED columns
+# ============================================================
+
+awk 'BEGIN{OFS="\t"}
+{
+    sub(/\r$/, "", $0)
+    split($4, a, "_")
+
+    if (a[1] == "LINE/L1")
+        print $1,$2,$3,$4,$5,$6
+}' "$ANNOT" \
+> L1_read_counts/L1_regions.bed
+
+
+# ============================================================
+# 2. MAPQ >= 10 filtering
+#    P12a, P12b, P15a, P15b PBMC
+#    plus and minus BAM separately
+# ============================================================
+
+samples=(
+    P12a
+    P12b
+    P15a
+    P15b
+)
+
+for sample in "${samples[@]}"
+do
+
+    plus_matches=( ${sample}*PBMC*_plus.bam )
+    minus_matches=( ${sample}*PBMC*_minus.bam )
+
+    if [ ${#plus_matches[@]} -ne 1 ]; then
+        echo "ERROR: expected exactly one plus BAM for ${sample}"
+        printf '%s\n' "${plus_matches[@]}"
+        exit 1
+    fi
+
+    if [ ${#minus_matches[@]} -ne 1 ]; then
+        echo "ERROR: expected exactly one minus BAM for ${sample}"
+        printf '%s\n' "${minus_matches[@]}"
+        exit 1
+    fi
+
+    plus_bam="${plus_matches[0]}"
+    minus_bam="${minus_matches[0]}"
+
+    echo "Filtering ${plus_bam}"
+    samtools view \
+        -@ 4 \
+        -bh \
+        -q 10 \
+        "$plus_bam" \
+        > "mapq10_bam/${sample}_plus.mapq10.bam"
+
+    samtools index \
+        -@ 4 \
+        "mapq10_bam/${sample}_plus.mapq10.bam"
+
+
+    echo "Filtering ${minus_bam}"
+    samtools view \
+        -@ 4 \
+        -bh \
+        -q 10 \
+        "$minus_bam" \
+        > "mapq10_bam/${sample}_minus.mapq10.bam"
+
+    samtools index \
+        -@ 4 \
+        "mapq10_bam/${sample}_minus.mapq10.bam"
+
+done
+
+
+# ============================================================
+# 3. Count MAPQ>=10 plus/minus reads overlapping each L1
+#
+# Output columns:
+# 1-6   L1 BED annotation
+# 7     P12a plus
+# 8     P12a minus
+# 9     P12b plus
+# 10    P12b minus
+# 11    P15a plus
+# 12    P15a minus
+# 13    P15b plus
+# 14    P15b minus
+# ============================================================
+
+bedtools multicov \
+    -bed L1_read_counts/L1_regions.bed \
+    -bams \
+        mapq10_bam/P12a_plus.mapq10.bam \
+        mapq10_bam/P12a_minus.mapq10.bam \
+        mapq10_bam/P12b_plus.mapq10.bam \
+        mapq10_bam/P12b_minus.mapq10.bam \
+        mapq10_bam/P15a_plus.mapq10.bam \
+        mapq10_bam/P15a_minus.mapq10.bam \
+        mapq10_bam/P15b_plus.mapq10.bam \
+        mapq10_bam/P15b_minus.mapq10.bam \
+> L1_read_counts/L1_P12_P15_PBMC.raw.tsv
+
+
+# ============================================================
+# 4. Combine P12 replicate A + B
+#
+# Final columns:
+# 1 chr
+# 2 start
+# 3 end
+# 4 RepeatMasker label
+# 5 score
+# 6 TE strand
+# 7 plus reads
+# 8 minus reads
+# ============================================================
+
+awk 'BEGIN{FS=OFS="\t"}
+{
+    plus_reads  = $7 + $9
+    minus_reads = $8 + $10
+
+    print $1,$2,$3,$4,$5,$6,plus_reads,minus_reads
+}' \
+L1_read_counts/L1_P12_P15_PBMC.raw.tsv \
+> L1_read_counts/P12_PBMC_L1_plus_minus_counts.bed
+
+
+# ============================================================
+# 5. Combine P15 replicate A + B
+# ============================================================
+
+awk 'BEGIN{FS=OFS="\t"}
+{
+    plus_reads  = $11 + $13
+    minus_reads = $12 + $14
+
+    print $1,$2,$3,$4,$5,$6,plus_reads,minus_reads
+}' \
+L1_read_counts/L1_P12_P15_PBMC.raw.tsv \
+> L1_read_counts/P15_PBMC_L1_plus_minus_counts.bed
+
+
+# ============================================================
+# 6. Quick checks
+# ============================================================
+
+echo
+echo "Final files:"
+wc -l \
+    L1_read_counts/P12_PBMC_L1_plus_minus_counts.bed \
+    L1_read_counts/P15_PBMC_L1_plus_minus_counts.bed
+
+echo
+echo "P12:"
+head -n 3 L1_read_counts/P12_PBMC_L1_plus_minus_counts.bed
+
+echo
+echo "P15:"
+head -n 3 L1_read_counts/P15_PBMC_L1_plus_minus_counts.bed
