@@ -1,0 +1,31 @@
+## Log2 Fold-Change Shrinkage and heatmap
+
+This Jupyter notebook takes the raw **TEtranscripts/TEcount differential-expression results** and applies a log2 fold-change (LFC) shrinkage step. The purpose of this step is to reduce unstable or exaggerated LFC estimates associated with low-abundance transposable elements (i.e., features with low `baseMean` values), while retaining large effect sizes that are supported by sufficient read counts.
+
+A related discussion can be found in **TEtranscripts GitHub issue #24, *“Treatment vs control and DeSeq2 alternative”***, in which the use of DESeq2 for downstream differential-expression analysis of TEtranscripts results was discussed.
+
+Similar approaches combining TE quantification with DESeq2-based LFC shrinkage have been used in several published studies:
+
+1. **Garza R, Atacho DAM, Adami A, et al. (2023). *LINE-1 retrotransposons drive human neuronal transcriptome complexity and functional diversification.* Science Advances 9(44): eadh9543. doi:10.1126/sciadv.adh9543.**
+
+   The authors quantified TE subfamilies using **TEcount**, performed differential-expression analysis using **DESeq2**, and explicitly applied `DESeq2::lfcShrink` to the resulting fold-change estimates.
+
+2. **Adami A, Garza R, Gerdes P, et al. (2025). *LINE-1 retrotransposons mediate cis-acting transcriptional control in human pluripotent stem cells and regulate early brain development.* Cell Genomics 5(10): 100979. doi:10.1016/j.xgen.2025.100979.**
+
+   Differential TE-subfamily expression was analyzed using **DESeq2**, followed by `DESeq2::lfcShrink` for LFC shrinkage.
+
+   Notably, both the Garza et al. and Adami et al. studies focus extensively on **LINE-1 (L1)** expression and regulation, providing direct precedent for applying LFC shrinkage in L1/TE-focused transcriptomic analyses.
+
+3. **Ivancevic A, Simpson DM, Joyner OM, et al. (2024). *Endogenous retroviruses mediate transcriptional rewiring in response to oncogenic signaling in colorectal cancer.* Science Advances 10(29): eado1218. doi:10.1126/sciadv.ado1218.**
+
+   The authors quantified TE expression using **TEtranscripts**, analyzed the resulting count tables using **DESeq2**, and incorporated **apeglm**, a Bayesian LFC-shrinkage estimator compatible with DESeq2, into the downstream differential-expression workflow.
+
+4. **Nguyen LL, Watson ZL, Ortega R, et al. (2024). *Combining EHMT and PARP Inhibition: A Strategy to Diminish Therapy-Resistant Ovarian Cancer Tumor Growth while Stimulating Immune Activation.* Molecular Cancer Therapeutics 23(9): 1332–1347. doi:10.1158/1535-7163.MCT-23-0613.**
+
+   TE expression was quantified using **TEtranscripts** in multimapping mode and analyzed using **DESeq2**, with **apeglm** incorporated into the downstream differential-expression analysis.
+
+5. **Vandewege MW, Patt RN II, Merriman DK, Ray DA, Hoffmann FG. (2022). *The PIWI/piRNA response is relaxed in a rodent that lacks mobilizing transposable elements.* RNA 28(4): 609–621. doi:10.1261/rna.078862.121.**
+
+   The authors used **TEcount** to quantify genome-wide TE-family expression and **DESeq2** for normalization and differential-expression analysis. Importantly, they explicitly applied **apeglm log-fold-change shrinkage to lowly expressed TEs** when plotting fold change against expression.
+
+Together, these studies provide precedent for applying LFC shrinkage downstream of TEtranscripts/TEcount analyses. We therefore apply a similar shrinkage strategy here to reduce disproportionately large LFC estimates associated with low `baseMean` values and to obtain more stable effect-size estimates for downstream visualization and interpretation.
