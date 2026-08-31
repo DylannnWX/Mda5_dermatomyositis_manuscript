@@ -181,4 +181,4 @@ https://drive.google.com/file/d/1yQtQWtg-UbY7B8iZSrHm05SUwmYZZ4T5/view?usp=shari
 ## Reproducibility
 
 The upstream primary-mapping AUC calculation, the RepeatMasker BED file, and the downstream AUC-weighted quantile analysis should be kept together so the complete workflow can be reproduced from the original BAM files.
-
+For the jupyter code, you can edit/modify the heatmaps to include more or fewer groups, or shuffle the orders, but the numbers are the same.
