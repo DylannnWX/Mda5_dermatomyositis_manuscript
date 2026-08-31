@@ -1,4 +1,4 @@
-# Primary-mapping RepeatMasker AUC and TE tail-asymmetry analysis
+# Primary-mapping RepeatMasker AUC and TE AuC-weighed Log2FC analysis
 
 This workflow quantifies RepeatMasker-region signal from primary-mapped reads and summarizes LINE, SINE, and ERV changes from the distribution of region-level log2 fold changes.
 
