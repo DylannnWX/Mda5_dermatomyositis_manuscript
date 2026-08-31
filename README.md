@@ -20,5 +20,3 @@ Welcome to our Github! Here are the scripts and codes used for our Mda5 dermatom
    3b: Required software packages: gcc(v14.2.0), samtools(v1.21), bedtools(2.31.0), python(3.13.1)
    
    3c. Repbase, downloaded directly as a .bed file
-
-   
