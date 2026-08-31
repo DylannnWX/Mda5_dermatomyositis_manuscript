@@ -1,0 +1,204 @@
+# Trimmomatic + Bowtie2 hg38 Mapping Pipeline
+
+## Overview
+
+This O2 pipeline performs:
+
+```text
+paired-end FASTQ
+    |
+    v
+Trimmomatic
+    |
+    v
+trimmed paired FASTQ
+    |
+    v
+Bowtie2 mapping to hg38
+    |
+    v
+coordinate-sorted BAM
+    |
+    v
+BAM index + mapping statistics
+```
+
+The resulting BAM contains the Bowtie2 alignments without any downstream MAPQ filtering. Filtering can be performed later as needed.
+
+---
+
+## Required O2 modules
+
+The script loads:
+
+```bash
+module purge
+module load gcc/14.2.0
+module load trimmomatic/0.39
+module load bowtie2/2.5.4
+module load samtools/1.21
+```
+
+---
+
+## Inputs
+
+The script takes three command-line arguments:
+
+```text
+SAMPLE
+R1.fastq.gz
+R2.fastq.gz
+```
+
+Example:
+
+```bash
+sbatch trim_bowtie2_hg38.sh \
+    P12a \
+    P12a_R1.fastq.gz \
+    P12a_R2.fastq.gz
+```
+
+---
+
+## Paths to edit
+
+Before running, edit these two variables near the top of the script.
+
+### hg38 Bowtie2 index
+
+```bash
+HG38_INDEX="/path/to/Human_Gchr/hg38"
+```
+
+This must be the **Bowtie2 index prefix**, not the FASTA file itself.
+
+For example, if the index files are:
+
+```text
+/path/to/Human_Gchr/hg38.1.bt2
+/path/to/Human_Gchr/hg38.2.bt2
+/path/to/Human_Gchr/hg38.3.bt2
+...
+```
+
+then use:
+
+```bash
+HG38_INDEX="/path/to/Human_Gchr/hg38"
+```
+
+### Adapter FASTA
+
+```bash
+ADAPTERS="/path/to/adapters.fa"
+```
+
+Set this to the adapter FASTA appropriate for the sequencing library.
+
+---
+
+## Trimmomatic settings
+
+The script runs paired-end Trimmomatic with:
+
+```text
+ILLUMINACLIP:adapter.fa:2:30:10
+LEADING:3
+TRAILING:3
+SLIDINGWINDOW:4:15
+MINLEN:36
+```
+
+Four FASTQ files are produced:
+
+```text
+SAMPLE_R1_paired.fastq.gz
+SAMPLE_R1_unpaired.fastq.gz
+SAMPLE_R2_paired.fastq.gz
+SAMPLE_R2_unpaired.fastq.gz
+```
+
+The paired surviving reads are used for Bowtie2 mapping.
+
+The unpaired surviving reads are retained in the output folder but are not mapped by this script.
+
+---
+
+## Bowtie2 mapping
+
+Bowtie2 is run using:
+
+```text
+--very-sensitive
+```
+
+with the trimmed paired FASTQ files.
+
+The SAM output is streamed directly through `samtools` and coordinate-sorted, so a large intermediate SAM file is not written to disk.
+
+No MAPQ filtering is applied during this step.
+
+---
+
+## O2 resources
+
+The default Slurm request is:
+
+```text
+8 CPUs
+40 GB RAM
+24 hours
+```
+
+defined as:
+
+```bash
+#SBATCH -c 8
+#SBATCH -t 1-00:00
+#SBATCH --mem=40G
+```
+
+These can be adjusted if needed.
+
+---
+
+## Output
+
+For a sample named:
+
+```text
+P12a
+```
+
+the output directory is:
+
+```text
+P12a_Hg38_BT2/
+```
+
+with:
+
+```text
+P12a_Hg38_BT2/
+├── trimmed/
+│   ├── P12a_R1_paired.fastq.gz
+│   ├── P12a_R1_unpaired.fastq.gz
+│   ├── P12a_R2_paired.fastq.gz
+│   └── P12a_R2_unpaired.fastq.gz
+│
+├── P12a_All_wholeHg38_BT2.bam
+├── P12a_All_wholeHg38_BT2.bam.bai
+├── P12a.bowtie2.log
+├── P12a.flagstat.txt
+└── P12a.idxstats.txt
+```
+
+The main alignment file is:
+
+```text
+P12a_All_wholeHg38_BT2.bam
+```
+
+This BAM can subsequently be used for MAPQ filtering, strand separation, repeat AUC analysis, or other downstream analyses.
