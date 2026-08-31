@@ -13,3 +13,7 @@ Welcome to our Github! Here are the scripts and codes used for our Mda5 dermatom
    
    2b. Required software packages: gcc(v14.2.0), STAR (2.7.11b), samtools(v1.21)
 
+3. Count TE by class: this utilizes mapped bam files, filter to primary alignments, and count TEs that are differentially expressed (|Log2FC|>1) between patients and HC, and then sum it up by class.
+   3a. Environment: HMS O2
+   3b: Required software packages: gcc(v14.2.0), samtools(v1.21), bedtools(2.31.0), python(3.13.1)
+   3c. Repbase, downloaded directly as a .bed file
