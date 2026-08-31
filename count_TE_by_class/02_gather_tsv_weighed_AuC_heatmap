@@ -1,0 +1,1104 @@
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
+
+
+# ============================================================
+# Input / output
+# ============================================================
+
+AUC_DIR = Path(
+    r"G:\Cdrive_deposit\RNAseq\Tiffany\ERCC\Separated\rerun"
+)
+
+OUTDIR = Path(
+    "AuC_out/AUC_weighted_quantile"
+)
+
+OUTDIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# Analysis parameters
+# ============================================================
+
+CHUNK_SIZE = 100_000
+
+FC_CAP = 8.0
+BIN_WIDTH = 0.20
+
+FC_EDGES = np.linspace(
+    -FC_CAP,
+    FC_CAP,
+    int((2 * FC_CAP) / BIN_WIDTH) + 1
+)
+
+FC_CENTERS = (
+    FC_EDGES[:-1] +
+    FC_EDGES[1:]
+) / 2
+
+
+# ============================================================
+# Samples
+# ============================================================
+
+PLASMA_PATIENTS = [
+    "P12",
+    "P15",
+    "P18",
+    "P6",
+    "P17",
+    "P7",
+    "P8",
+    "P11",
+    "P13"
+]
+
+PBMC_PATIENTS = [
+    "P12",
+    "P15",
+    "P6",
+    "P7",
+    "P8",
+    "P11",
+    "P13"
+]
+
+PLASMA_ORDER = [
+    "HC1",
+    "HC2"
+] + PLASMA_PATIENTS
+
+PBMC_ORDER = [
+    "HC1",
+    "HC2"
+] + PBMC_PATIENTS
+
+CATEGORIES = [
+    "LINE",
+    "SINE",
+    "ERV"
+]
+
+
+# ============================================================
+# Plot style
+# ============================================================
+
+plt.rcParams["font.family"] = "Arial"
+plt.rcParams["figure.facecolor"] = "white"
+plt.rcParams["axes.facecolor"] = "white"
+
+
+# ============================================================
+# Locate AUC file
+# ============================================================
+
+def find_auc_file(rep, tissue):
+
+    if tissue == "PBMC":
+
+        path = (
+            AUC_DIR /
+            f"{rep}_PBMC.repeat_AUC.tsv"
+        )
+
+        if not path.exists():
+
+            raise FileNotFoundError(
+                path
+            )
+
+        return path
+
+
+    if tissue == "plasma":
+
+        explicit = (
+            AUC_DIR /
+            f"{rep}_plasma.repeat_AUC.tsv"
+        )
+
+        untagged = (
+            AUC_DIR /
+            f"{rep}.repeat_AUC.tsv"
+        )
+
+
+        if (
+            explicit.exists() and
+            untagged.exists()
+        ):
+
+            raise RuntimeError(
+                f"Both plasma naming styles exist for {rep}:\n"
+                f"{explicit}\n"
+                f"{untagged}"
+            )
+
+
+        if explicit.exists():
+            return explicit
+
+
+        if untagged.exists():
+            return untagged
+
+
+        raise FileNotFoundError(
+            f"No plasma AUC file found for {rep}"
+        )
+
+
+    raise ValueError(
+        "tissue must be PBMC or plasma"
+    )
+
+
+# ============================================================
+# Region-level log2FC
+# ============================================================
+
+def safe_log2fc(
+    patient_auc,
+    hc_auc
+):
+
+    patient_auc = np.asarray(
+        patient_auc,
+        dtype=float
+    )
+
+    hc_auc = np.asarray(
+        hc_auc,
+        dtype=float
+    )
+
+
+    out = np.zeros_like(
+        patient_auc,
+        dtype=float
+    )
+
+
+    both_positive = (
+        (patient_auc > 0) &
+        (hc_auc > 0)
+    )
+
+
+    out[both_positive] = np.log2(
+        patient_auc[both_positive] /
+        hc_auc[both_positive]
+    )
+
+
+    # Patient > 0, HC = 0
+    out[
+        (patient_auc > 0) &
+        (hc_auc == 0)
+    ] = np.inf
+
+
+    # Patient = 0, HC > 0
+    out[
+        (patient_auc == 0) &
+        (hc_auc > 0)
+    ] = -np.inf
+
+
+    # Both zero remains zero
+
+    return out
+
+
+# ============================================================
+# Weighted quantile from histogram
+# ============================================================
+
+def weighted_quantile_from_hist(
+    hist,
+    centers,
+    quantile
+):
+
+    hist = np.asarray(
+        hist,
+        dtype=float
+    )
+
+    centers = np.asarray(
+        centers,
+        dtype=float
+    )
+
+
+    total = hist.sum()
+
+
+    if total <= 0:
+        return np.nan
+
+
+    cumulative = np.cumsum(
+        hist
+    )
+
+
+    cutoff = (
+        quantile *
+        total
+    )
+
+
+    idx = np.searchsorted(
+        cumulative,
+        cutoff
+    )
+
+
+    idx = np.clip(
+        idx,
+        0,
+        len(centers) - 1
+    )
+
+
+    return centers[idx]
+
+
+# ============================================================
+# Calculate one tissue
+# ============================================================
+
+def calculate_tissue(
+    tissue,
+    patients
+):
+
+    # --------------------------------------------------------
+    # Required replicate files
+    # --------------------------------------------------------
+
+    reps = [
+        "HC1a",
+        "HC1b",
+        "HC2a",
+        "HC2b"
+    ]
+
+
+    for patient in patients:
+
+        reps.extend([
+            f"{patient}a",
+            f"{patient}b"
+        ])
+
+
+    files = {
+
+        rep:
+            find_auc_file(
+                rep,
+                tissue
+            )
+
+        for rep in reps
+    }
+
+
+    print()
+    print(
+        "=" * 60
+    )
+
+    print(
+        tissue
+    )
+
+    print(
+        "=" * 60
+    )
+
+
+    for rep, path in files.items():
+
+        print(
+            f"{rep:8s} -> {path.name}"
+        )
+
+
+    # --------------------------------------------------------
+    # HC1a is used as the annotation/reference stream
+    # --------------------------------------------------------
+
+    reference_rep = "HC1a"
+
+
+    reference_iterator = pd.read_csv(
+        files[reference_rep],
+        sep="\t",
+        usecols=[
+            "TE_class",
+            "RepeatMasker_label",
+            "AUC"
+        ],
+        chunksize=CHUNK_SIZE
+    )
+
+
+    other_iterators = {}
+
+
+    for rep, path in files.items():
+
+        if rep == reference_rep:
+            continue
+
+
+        other_iterators[rep] = (
+            pd.read_csv(
+                path,
+                sep="\t",
+                usecols=["AUC"],
+                chunksize=CHUNK_SIZE
+            )
+        )
+
+
+    # --------------------------------------------------------
+    # AUC-weighted log2FC histograms
+    # --------------------------------------------------------
+
+    histograms = {
+
+        patient: {
+
+            category:
+                np.zeros(
+                    len(FC_CENTERS),
+                    dtype=np.float64
+                )
+
+            for category in CATEGORIES
+        }
+
+        for patient in patients
+    }
+
+
+    total_rows = 0
+
+
+    # ========================================================
+    # Stream through RepeatMasker regions
+    # ========================================================
+
+    for chunk_number, ref_chunk in enumerate(
+        reference_iterator,
+        start=1
+    ):
+
+        n_chunk = len(
+            ref_chunk
+        )
+
+
+        total_rows += (
+            n_chunk
+        )
+
+
+        # ----------------------------------------------------
+        # Read AUC values
+        # ----------------------------------------------------
+
+        auc = {
+
+            reference_rep:
+                ref_chunk["AUC"]
+                .to_numpy(float)
+        }
+
+
+        for rep, iterator in other_iterators.items():
+
+
+            chunk = next(
+                iterator,
+                None
+            )
+
+
+            if chunk is None:
+
+                raise RuntimeError(
+                    f"{rep} ended before "
+                    f"{reference_rep}"
+                )
+
+
+            if len(chunk) != n_chunk:
+
+                raise RuntimeError(
+                    f"Row mismatch for {rep}: "
+                    f"{len(chunk)} vs {n_chunk}"
+                )
+
+
+            auc[rep] = (
+                chunk["AUC"]
+                .to_numpy(float)
+            )
+
+
+        # ----------------------------------------------------
+        # Average control replicates
+        # ----------------------------------------------------
+
+        HC1 = (
+            auc["HC1a"] +
+            auc["HC1b"]
+        ) / 2.0
+
+
+        HC2 = (
+            auc["HC2a"] +
+            auc["HC2b"]
+        ) / 2.0
+
+
+        HC = (
+            HC1 +
+            HC2
+        ) / 2.0
+
+
+        # ----------------------------------------------------
+        # RepeatMasker category annotation
+        # ----------------------------------------------------
+
+        te_class = (
+            ref_chunk["TE_class"]
+            .astype(str)
+            .to_numpy()
+        )
+
+
+        repeat_labels = (
+            ref_chunk[
+                "RepeatMasker_label"
+            ]
+            .astype(str)
+        )
+
+
+        # ERV defined by RepeatMasker label containing ERV
+        is_erv = (
+            repeat_labels
+            .str.contains(
+                "ERV",
+                case=False,
+                na=False
+            )
+            .to_numpy()
+        )
+
+
+        category_masks = {
+
+            "LINE":
+                (
+                    (te_class == "LINE") &
+                    (~is_erv)
+                ),
+
+            "SINE":
+                (
+                    (te_class == "SINE") &
+                    (~is_erv)
+                ),
+
+            "ERV":
+                is_erv
+        }
+
+
+        # ====================================================
+        # Each patient
+        # ====================================================
+
+        for patient in patients:
+
+
+            # ------------------------------------------------
+            # Average biological replicates
+            # ------------------------------------------------
+
+            patient_auc = (
+                auc[f"{patient}a"] +
+                auc[f"{patient}b"]
+            ) / 2.0
+
+
+            # ------------------------------------------------
+            # Region-level log2FC
+            # ------------------------------------------------
+
+            region_log2fc = safe_log2fc(
+                patient_auc,
+                HC
+            )
+
+
+            # ------------------------------------------------
+            # Convert +/-Inf to fixed distribution limits
+            # ------------------------------------------------
+
+            region_log2fc = np.nan_to_num(
+                region_log2fc,
+                nan=0.0,
+                posinf=FC_CAP,
+                neginf=-FC_CAP
+            )
+
+
+            region_log2fc = np.clip(
+                region_log2fc,
+                -FC_CAP,
+                FC_CAP
+            )
+
+
+            # ------------------------------------------------
+            # Each region is weighted by its mean AUC
+            # between patient and HC
+            # ------------------------------------------------
+
+            auc_weight = (
+                patient_auc +
+                HC
+            ) / 2.0
+
+
+            # ------------------------------------------------
+            # Build weighted distributions
+            # ------------------------------------------------
+
+            for category, mask in (
+                category_masks.items()
+            ):
+
+
+                if not np.any(mask):
+                    continue
+
+
+                weighted_histogram, _ = (
+                    np.histogram(
+                        region_log2fc[mask],
+                        bins=FC_EDGES,
+                        weights=auc_weight[mask]
+                    )
+                )
+
+
+                histograms[
+                    patient
+                ][category] += (
+                    weighted_histogram
+                )
+
+
+        if (
+            chunk_number %
+            10 == 0
+        ):
+
+            print(
+                f"{tissue}: "
+                f"{total_rows:,} regions processed"
+            )
+
+
+    # ========================================================
+    # Check for extra rows in any other TSV
+    # ========================================================
+
+    for rep, iterator in (
+        other_iterators.items()
+    ):
+
+        extra_chunk = next(
+            iterator,
+            None
+        )
+
+
+        if extra_chunk is not None:
+
+            raise RuntimeError(
+                f"{rep} contains additional rows "
+                f"after {reference_rep} ended."
+            )
+
+
+    # ========================================================
+    # AUC-weighted paired-quantile score
+    # ========================================================
+
+    scores = pd.DataFrame(
+        index=patients,
+        columns=CATEGORIES,
+        dtype=float
+    )
+
+
+    for patient in patients:
+
+        for category in CATEGORIES:
+
+
+            hist = (
+                histograms[
+                    patient
+                ][category]
+            )
+
+
+            upper_quantile = (
+                weighted_quantile_from_hist(
+                    hist,
+                    FC_CENTERS,
+                    0.61
+                )
+            )
+
+
+            lower_quantile = (
+                weighted_quantile_from_hist(
+                    hist,
+                    FC_CENTERS,
+                    0.39
+                )
+            )
+
+
+            scores.loc[
+                patient,
+                category
+            ] = (
+                upper_quantile +
+                lower_quantile
+            )
+
+
+    print()
+    print(
+        f"Finished {tissue}: "
+        f"{total_rows:,} RepeatMasker regions"
+    )
+
+
+    return (
+        scores,
+        histograms
+    )
+
+
+# ============================================================
+# Run plasma
+# ============================================================
+
+plasma_scores, plasma_histograms = (
+    calculate_tissue(
+        tissue="plasma",
+        patients=PLASMA_PATIENTS
+    )
+)
+
+
+# ============================================================
+# Run PBMC
+# ============================================================
+
+pbmc_scores, pbmc_histograms = (
+    calculate_tissue(
+        tissue="PBMC",
+        patients=PBMC_PATIENTS
+    )
+)
+
+
+# ============================================================
+# Display numerical scores
+# ============================================================
+
+print()
+print(
+    "=" * 60
+)
+
+print(
+    "PLASMA"
+)
+
+print(
+    "=" * 60
+)
+
+display(
+    plasma_scores.round(3)
+)
+
+
+print()
+print(
+    "=" * 60
+)
+
+print(
+    "PBMC"
+)
+
+print(
+    "=" * 60
+)
+
+display(
+    pbmc_scores.round(3)
+)
+
+
+# ============================================================
+# Save numerical TSV outputs
+# ============================================================
+
+plasma_scores.to_csv(
+    OUTDIR /
+    "plasma.AUC_weighted_quantile_score.tsv",
+    sep="\t",
+    index_label="sample"
+)
+
+
+pbmc_scores.to_csv(
+    OUTDIR /
+    "PBMC.AUC_weighted_quantile_score.tsv",
+    sep="\t",
+    index_label="sample"
+)
+
+
+combined_scores = pd.concat(
+    [
+        (
+            plasma_scores
+            .rename_axis("sample")
+            .reset_index()
+            .assign(
+                tissue="plasma"
+            )
+        ),
+
+        (
+            pbmc_scores
+            .rename_axis("sample")
+            .reset_index()
+            .assign(
+                tissue="PBMC"
+            )
+        )
+    ],
+    ignore_index=True
+)
+
+
+combined_scores = combined_scores[
+    [
+        "sample",
+        "tissue",
+        "LINE",
+        "SINE",
+        "ERV"
+    ]
+]
+
+
+combined_scores.to_csv(
+    OUTDIR /
+    "all_samples.AUC_weighted_quantile_score.tsv",
+    sep="\t",
+    index=False
+)
+
+
+# ============================================================
+# Prepare heatmap
+# ============================================================
+
+plasma_plot = (
+    plasma_scores.copy()
+)
+
+pbmc_plot = (
+    pbmc_scores.copy()
+)
+
+
+# Display HC controls as zero
+plasma_plot.loc[
+    "HC1"
+] = 0.0
+
+plasma_plot.loc[
+    "HC2"
+] = 0.0
+
+
+pbmc_plot.loc[
+    "HC1"
+] = 0.0
+
+pbmc_plot.loc[
+    "HC2"
+] = 0.0
+
+
+plasma_plot = (
+    plasma_plot
+    .reindex(
+        PLASMA_ORDER
+    )
+    [CATEGORIES]
+)
+
+
+pbmc_plot = (
+    pbmc_plot
+    .reindex(
+        PBMC_ORDER
+    )
+    [CATEGORIES]
+)
+
+
+# Negative values are clipped ONLY for visualization.
+# Saved TSV files above retain signed values.
+plasma_heat = (
+    plasma_plot
+    .clip(lower=0)
+)
+
+pbmc_heat = (
+    pbmc_plot
+    .clip(lower=0)
+)
+
+
+# ============================================================
+# Plot plasma + PBMC heatmaps
+# Same fixed 0-9 color scale
+# ============================================================
+
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(13, 3.8),
+    gridspec_kw={
+        "width_ratios": [
+            len(PLASMA_ORDER),
+            len(PBMC_ORDER)
+        ]
+    }
+)
+
+
+cmap = plt.cm.Reds.copy()
+
+cmap.set_bad(
+    color="white"
+)
+
+
+# ------------------------------------------------------------
+# Plasma
+# ------------------------------------------------------------
+
+axes[0].imshow(
+    plasma_heat.values.T,
+    aspect="auto",
+    cmap=cmap,
+    vmin=0,
+    vmax=9
+)
+
+
+axes[0].set_title(
+    "plasma",
+    fontsize=18,
+    fontweight="bold"
+)
+
+
+axes[0].set_xticks(
+    range(
+        len(PLASMA_ORDER)
+    )
+)
+
+
+axes[0].set_xticklabels(
+    PLASMA_ORDER,
+    rotation=90,
+    fontsize=13
+)
+
+
+axes[0].set_yticks(
+    range(3)
+)
+
+
+axes[0].set_yticklabels(
+    [
+        "LINEs",
+        "SINEs",
+        "ERVs"
+    ],
+    fontsize=14
+)
+
+
+# ------------------------------------------------------------
+# PBMC
+# ------------------------------------------------------------
+
+axes[1].imshow(
+    pbmc_heat.values.T,
+    aspect="auto",
+    cmap=cmap,
+    vmin=0,
+    vmax=9
+)
+
+
+axes[1].set_title(
+    "PBMC",
+    fontsize=18,
+    fontweight="bold"
+)
+
+
+axes[1].set_xticks(
+    range(
+        len(PBMC_ORDER)
+    )
+)
+
+
+axes[1].set_xticklabels(
+    PBMC_ORDER,
+    rotation=90,
+    fontsize=13
+)
+
+
+axes[1].set_yticks(
+    range(3)
+)
+
+
+axes[1].set_yticklabels([])
+
+
+# ------------------------------------------------------------
+# Shared colorbar
+# ------------------------------------------------------------
+
+sm = ScalarMappable(
+    norm=Normalize(
+        vmin=0,
+        vmax=9
+    ),
+    cmap=cmap
+)
+
+
+sm.set_array([])
+
+
+cbar = fig.colorbar(
+    sm,
+    ax=axes,
+    fraction=0.025,
+    pad=0.025
+)
+
+
+cbar.set_label(
+    "AUC-weighted log2FC quantile score",
+    fontsize=11
+)
+
+
+plt.subplots_adjust(
+    left=0.08,
+    right=0.92,
+    bottom=0.25,
+    top=0.85,
+    wspace=0.08
+)
+
+
+heatmap_file = (
+    OUTDIR /
+    "plasma_PBMC.AUC_weighted_quantile_score.heatmap.png"
+)
+
+
+plt.savefig(
+    heatmap_file,
+    dpi=150,
+    bbox_inches="tight"
+)
+
+
+plt.show()
+
+
+# ============================================================
+# Final output summary
+# ============================================================
+
+print()
+print(
+    "Saved:"
+)
+
+print(
+    OUTDIR /
+    "plasma.AUC_weighted_quantile_score.tsv"
+)
+
+print(
+    OUTDIR /
+    "PBMC.AUC_weighted_quantile_score.tsv"
+)
+
+print(
+    OUTDIR /
+    "all_samples.AUC_weighted_quantile_score.tsv"
+)
+
+print(
+    heatmap_file
+)
