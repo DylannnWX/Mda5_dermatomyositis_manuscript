@@ -9,20 +9,20 @@ This pipeline takes three input BAM files:
 - one patient sample
 
 and performs the following analysis:
-
-1. Filters each BAM to retain alignments with **MAPQ ≥ 10**, used here as the unique-mapping criterion.
-2. Counts the number of alignments passing the MAPQ ≥ 10 filter.
-3. Generates genome-wide coverage.
-4. Normalizes coverage using the number of MAPQ ≥ 10 alignments.
-5. Calculates the **area under the curve (AUC)** for every repeat region.
-6. Calculates the mean repeat-region AUC across `HC1` and `HC2`.
-7. Compares the patient AUC against the mean HC AUC using log2 fold change.
-8. Defines repeat regions with:
+1. Map fastq file to Hg38 by bowtie2.
+2. Filters each BAM to retain alignments with **MAPQ ≥ 10**, used here as the unique-mapping criterion.
+3. Counts the number of alignments passing the MAPQ ≥ 10 filter.
+4. Generates genome-wide coverage.
+5. Normalizes coverage using the number of MAPQ ≥ 10 alignments.
+6. Calculates the **area under the curve (AUC)** for every repeat region.
+7. Calculates the mean repeat-region AUC across `HC1` and `HC2`.
+8. Compares the patient AUC against the mean HC AUC using log2 fold change.
+9. Defines repeat regions with:
 
    `log2FC < -1` or `log2FC > 1`
 
    as **differential regions**.
-9. Sums AUC values from all differential regions within each repeat class.
+10. Sums AUC values from all differential regions within each repeat class.
 
 The pipeline also produces a direction-separated summary for regions that are higher or lower in the patient.
 
