@@ -1,696 +1,177 @@
-# Repeat AUC Differential-Region Pipeline
+# Primary-mapping RepeatMasker AUC and TE tail-asymmetry analysis
 
-## Overview
+This workflow quantifies RepeatMasker-region signal from primary-mapped reads and summarizes LINE, SINE, and ERV changes from the distribution of region-level log2 fold changes.
 
-This pipeline takes three input BAM files:
+## 1. Region-level AUC tables
 
-- `HC1`
-- `HC2`
-- one patient sample
-
-and performs the following analysis:
-
-1. Filters each BAM to retain **primary mapped alignments**.
-2. Counts the number of primary mapped alignments.
-3. Generates genome-wide coverage.
-4. Calculates the **area under the curve (AUC)** for every repeat region.
-5. Calculates the mean repeat-region AUC across `HC1` and `HC2`.
-6. Compares the patient AUC against the mean HC AUC using log2 fold change.
-7. Defines repeat regions with:
-
-   `log2FC < -1` or `log2FC > 1`
-
-   as **differential regions**.
-8. Sums AUC values from all differential regions within each repeat class.
-
-The pipeline also produces a direction-separated summary for regions that are higher or lower in the patient.
-
----
-
-## Required software
-
-The following programs must be available in `$PATH`:
-
-- `samtools`
-- `bedtools`
-- `python3`
-
-Example check:
-
-```bash
-samtools --version
-bedtools --version
-python3 --version
-```
-
----
-
-## Input files
-
-### BAM files
-
-The script requires:
-
-```text
-HC1.bam
-HC2.bam
-PATIENT.bam
-```
-
-BAM files do not need to already be filtered for primary alignments.
-
-The script produces new coordinate-sorted primary-only BAMs.
-
----
-
-### Repeat-region BED file
-
-The `repeat.bed` repeat-annotation file used for this analysis was downloaded from **Repbase**.
-
-The repeat BED file must contain at least five tab-separated columns:
-
-```text
-chr    start    end    repeat_id    repeat_class
-```
-
-Example:
-
-```text
-chr1    10000    10500    repeat_0001    LINE
-chr1    20000    20400    repeat_0002    SINE
-chr1    30000    31200    repeat_0003    LTR
-```
-
-The columns are interpreted as:
-
-| Column | Description |
-|---|---|
-| 1 | Chromosome / contig |
-| 2 | BED start coordinate |
-| 3 | BED end coordinate |
-| 4 | Unique repeat-region identifier |
-| 5 | Repeat class |
-
-The chromosome/contig names in the BED file must match the names used in the BAM files.
-
----
-
-## Primary-mapping filter
-
-Primary mapped alignments are selected using:
+The upstream Slurm script `01_make_TE_AUC_primary.sbatch` starts from the unsplit Bowtie2 BAM files and retains primary mapped alignments with:
 
 ```bash
 samtools view -F 2308
 ```
 
-The flag value `2308` excludes:
+This excludes:
 
-```text
-4       unmapped
-256     secondary alignment
-2048    supplementary alignment
-```
+- unmapped alignments (`0x4`)
+- secondary alignments (`0x100`)
+- supplementary alignments (`0x800`)
 
-Therefore:
-
-```text
-2308 = 4 + 256 + 2048
-```
-
-This pipeline does **not** automatically remove:
-
-- PCR/optical duplicates
-- QC-failed reads
-
-unless those reads also meet one of the excluded flag criteria above.
-
-The normalization denominator is the number of alignments passing this primary-mapping filter.
-
----
-
-## Repeat-region AUC
-
-Each repeat BED interval is intersected with the normalized bedGraph.
-
-For a repeat region, AUC is calculated as:
-
-```text
-AUC = Σ(normalized coverage × overlap length)
-```
-
-where the sum is taken across all bedGraph segments overlapping that repeat region.
-
-For example, if a 500-bp repeat region has constant normalized coverage of 2:
-
-```text
-AUC = 500 × 2
-    = 1000
-```
-
-Thus, AUC represents the sum of normalized coverage across all bases in the repeat interval.
-
-It is not the mean coverage.
-
----
-
-## HC reference
-
-For every repeat region, the HC reference value is calculated independently as:
-
-```text
-HC_mean_AUC =
-    (HC1_AUC + HC2_AUC) / 2
-```
-
-The patient is compared against this averaged HC value.
-
----
-
-## Log2 fold change
-
-For every repeat region:
-
-```text
-log2FC =
-    log2(patient_AUC / HC_mean_AUC)
-```
-
-A repeat region is considered differential if:
-
-```text
-log2FC < -1
-```
-
-or:
-
-```text
-log2FC > 1
-```
-
-Equivalent fold-change interpretation:
-
-```text
-log2FC > 1
-    patient AUC > 2 × HC mean AUC
-
-log2FC < -1
-    patient AUC < 0.5 × HC mean AUC
-```
-
-Regions with exactly `log2FC = 1` or `log2FC = -1` are not included because the criterion is strictly `< -1` or `> 1`.
-
----
-
-## Handling zero AUC values
-
-No pseudocount is added.
-
-The pipeline handles zero values as follows:
-
-```text
-patient = 0 and HC = 0
-    log2FC = 0
-
-patient > 0 and HC = 0
-    log2FC = +Inf
-
-patient = 0 and HC > 0
-    log2FC = -Inf
-```
-
-Therefore, repeat regions detected only in the patient are considered strongly increased, while regions detected only in HC are considered strongly decreased.
-
-This avoids introducing an arbitrary pseudocount into the fold-change calculation.
-
----
-
-## Running the pipeline
-
-Assuming the script is called:
-
-```text
-repeat_auc_pipeline.sh
-```
-
-make it executable:
+The normalization denominator is the number of retained primary mapped alignments:
 
 ```bash
-chmod +x repeat_auc_pipeline.sh
+samtools view -c -F 2308 SAMPLE.bam
 ```
 
-Run:
-
-```bash
-./repeat_auc_pipeline.sh \
-    repeat_regions.bed \
-    HC1.bam \
-    HC2.bam \
-    P12 \
-    P12.bam \
-    P12_repeat_analysis
-```
-
-General syntax:
-
-```bash
-./repeat_auc_pipeline.sh \
-    REPEAT_BED \
-    HC1_BAM \
-    HC2_BAM \
-    PATIENT_NAME \
-    PATIENT_BAM \
-    OUTDIR
-```
-
-The output directory is optional.
-
-If omitted:
-
-```bash
-./repeat_auc_pipeline.sh \
-    repeat_regions.bed \
-    HC1.bam \
-    HC2.bam \
-    P12 \
-    P12.bam
-```
-
-the default output directory is:
+Genome-wide coverage is generated with `bedtools genomecov -bg` and normalized as:
 
 ```text
-repeat_AUC_P12/
+normalized coverage = coverage × 1,000,000 / number of primary mapped alignments
 ```
 
----
-
-## Threads
-
-The default number of threads is:
+For each RepeatMasker interval, AUC is calculated as:
 
 ```text
-8
+AUC = Σ(normalized coverage × overlap length in bp)
 ```
 
-This can be changed through the environment variable `THREADS`.
-
-For example:
-
-```bash
-THREADS=16 ./repeat_auc_pipeline.sh \
-    repeat_regions.bed \
-    HC1.bam \
-    HC2.bam \
-    P12 \
-    P12.bam \
-    P12_repeat_analysis
-```
-
----
-
-## Output structure
-
-Example:
+The resulting per-sample files are:
 
 ```text
-P12_repeat_analysis/
-├── primary_bam/
-│   ├── HC1.primary.bam
-│   ├── HC1.primary.bam.bai
-│   ├── HC2.primary.bam
-│   ├── HC2.primary.bam.bai
-│   ├── P12.primary.bam
-│   └── P12.primary.bam.bai
-│
-├── normalized_bedgraph/
-│   ├── HC1.normalized.bedGraph
-│   ├── HC2.normalized.bedGraph
-│   └── P12.normalized.bedGraph
-│
-├── repeat_AUC/
-│   ├── HC1.repeat_AUC.tsv
-│   ├── HC2.repeat_AUC.tsv
-│   └── P12.repeat_AUC.tsv
-│
-├── stats/
-│   └── primary_mapped_counts.tsv
-│
-├── P12.all_repeat_regions.tsv
-├── P12.differential_repeat_regions.tsv
-├── P12.differential_repeat_class_AUC.tsv
-└── P12.differential_repeat_class_AUC_by_direction.tsv
+repeat_AUC_primary/<sample>.repeat_AUC.tsv
 ```
 
----
-
-## Output file descriptions
-
-### `stats/primary_mapped_counts.tsv`
-
-Contains the normalization denominator for each sample.
-
-Example:
-
-```text
-sample    primary_mapped
-HC1       42361521
-HC2       39124517
-P12       44782106
-```
-
----
-
-### `normalized_bedgraph/*.normalized.bedGraph`
-
-Genome-wide normalized coverage.
-
-Format:
-
-```text
-chr    start    end    normalized_coverage
-```
-
-Example:
-
-```text
-chr1    10000    10125    0.4231
-chr1    10125    10201    0.5876
-```
-
----
-
-### `repeat_AUC/*.repeat_AUC.tsv`
-
-Contains the normalized AUC for every repeat region in each sample.
-
-Columns:
+with columns:
 
 ```text
 chr
 start
 end
-repeat_id
-repeat_class
+TE_name
+TE_class
+TE_strand
+RepeatMasker_label
 AUC
 ```
 
-Example:
+## 2. Replicate and control averaging
+
+For each tissue, biological replicates are averaged first:
 
 ```text
-chr    start    end    repeat_id    repeat_class    AUC
-chr1   10000    10500  repeat_0001  LINE            352.417
-chr1   20000    20400  repeat_0002  SINE            91.205
+HC1 = mean(HC1a, HC1b)
+HC2 = mean(HC2a, HC2b)
+HC  = mean(HC1, HC2)
+
+patient = mean(patient-a, patient-b)
 ```
 
----
-
-### `PATIENT.all_repeat_regions.tsv`
-
-Contains the comparison for every repeat region, including non-differential regions.
-
-Columns:
+A region-level fold change is then calculated:
 
 ```text
-chr
-start
-end
-repeat_id
-repeat_class
-PATIENT_AUC
-HC1_AUC
-HC2_AUC
-HC_mean_AUC
-log2FC
-direction
+region_log2FC = log2(patient_AUC / HC_AUC)
 ```
 
-Possible direction values are:
+Zero handling is:
 
 ```text
-higher_in_patient
-lower_in_patient
-not_differential
+patient = 0 and HC = 0  -> 0
+patient > 0 and HC = 0  -> +Inf
+patient = 0 and HC > 0  -> -Inf
 ```
 
----
+For construction of the weighted distribution, infinite values are represented at the fixed limits `-8` and `+8`.
 
-### `PATIENT.differential_repeat_regions.tsv`
+## 3. TE categories
 
-Contains only regions satisfying:
+Three TE categories are summarized:
 
 ```text
-log2FC < -1
+LINE
+SINE
+ERV
 ```
 
-or:
+LINE and SINE are assigned from the broad `TE_class` field. ERV intervals are identified from RepeatMasker labels containing `ERV` (case-insensitive).
+
+## 4. AUC-weighted regional log2FC distribution
+
+Each RepeatMasker region is weighted by its mean signal across patient and control:
 
 ```text
-log2FC > 1
+weight = (patient_AUC + HC_AUC) / 2
 ```
 
-This is the region-level list referred to as the **differential regions**.
+For each sample and TE category, the weighted distribution of region-level log2FC is accumulated from `-8` to `+8` using 0.2-log2FC bins.
 
----
-
-### `PATIENT.differential_repeat_class_AUC.tsv`
-
-This is the primary repeat-class summary.
-
-For every repeat class, the script sums the AUC values from all differential regions assigned to that class.
-
-Columns:
+The category score is:
 
 ```text
-repeat_class
-n_differential_regions
-PATIENT_sum_AUC
-HC1_sum_AUC
-HC2_sum_AUC
-HC_mean_sum_AUC
+score = weighted_Q0.61(region_log2FC) + weighted_Q0.39(region_log2FC)
 ```
 
-Example:
+This is a tail-asymmetry/distribution-asymmetry score derived from regional log2 fold changes. It is not a conventional class-level log2 fold change.
+
+The identical calculation and parameters are applied to LINE, SINE, and ERV.
+
+## 5. Heatmap
+
+For visualization only:
+
+- negative scores are clipped to 0
+- the heatmap scale is fixed from 0 to 9
+- the color map is `Reds`
+- HC1 and HC2 are displayed as 0
+- the underlying TSV output retains the original signed scores
+
+## 6. Expected input naming
+
+PBMC files use:
 
 ```text
-repeat_class    n_differential_regions    P12_sum_AUC    HC1_sum_AUC    HC2_sum_AUC    HC_mean_sum_AUC
-LINE            153                       8421.3         3611.2         3822.1         3716.65
-SINE            87                        3188.7         4812.3         4590.7         4701.50
-LTR             64                        5199.4         2211.5         2404.1         2307.80
+HC1a_PBMC.repeat_AUC.tsv
+P12a_PBMC.repeat_AUC.tsv
+...
 ```
 
-The same set of differential regions is used for both the patient and HC AUC sums.
-
----
-
-### `PATIENT.differential_repeat_class_AUC_by_direction.tsv`
-
-This is an additional summary in which differential regions are separated into:
+Plasma files may use either explicit plasma names:
 
 ```text
-higher_in_patient
+P11a_plasma.repeat_AUC.tsv
 ```
 
-and:
+or the older untagged plasma names:
 
 ```text
-lower_in_patient
+HC1a.repeat_AUC.tsv
+P12a.repeat_AUC.tsv
+...
 ```
 
-This can be useful when a repeat class contains both strongly increased and strongly decreased repeat regions.
+The analysis checks for ambiguous cases in which both naming styles exist for the same plasma replicate.
 
----
+## 7. Outputs
 
-## Analysis logic
-
-The complete workflow is:
+The Jupyter analysis writes:
 
 ```text
-Input BAM
-    |
-    v
-samtools -F 2308
-    |
-    v
-Primary mapped alignments
-    |
-    +----> count primary mappings
-    |
-    v
-bedtools genomecov
-    |
-    v
-Raw coverage
-    |
-    v
-coverage × 1,000,000 / primary mapped alignments
-    |
-    v
-normalized bedGraph
-    |
-    v
-Intersect with repeat BED
-    |
-    v
-Σ(normalized coverage × overlap bp)
-    |
-    v
-AUC for each repeat region
-    |
-    +-----------------------------+
-    |                             |
-    v                             v
-Patient AUC                 HC1 / HC2 AUC
-                                  |
-                                  v
-                         mean(HC1, HC2)
-                                  |
-                    +-------------+
-                    |
-                    v
-          log2(patient / HC mean)
-                    |
-                    v
-          retain log2FC < -1
-             or log2FC > 1
-                    |
-                    v
-          Differential regions
-                    |
-                    v
-      Group by repeat_class
-                    |
-                    v
-        Sum repeat-region AUC
+AuC_out/tail_asym_q061/
+├── plasma.tail_asym_q0.61.tsv
+├── PBMC.tail_asym_q0.61.tsv
+├── all_samples.tail_asym_q0.61.tsv
+└── plasma_PBMC.tail_asym_q0.61.heatmap.png
 ```
 
----
+The TSV files contain the numerical scores used for downstream analysis. Negative values are retained in these tables even though they are displayed as white in the red-only heatmap.
 
-## Important assumptions
-
-### 1. The same repeat BED is used for all samples
-
-HC1, HC2, and the patient must be evaluated against the identical set of repeat regions.
-
-The script checks that the resulting region sets match before performing the comparison.
-
----
-
-### 2. BED coordinates use standard BED conventions
-
-Coordinates are assumed to be:
+## 8. Python requirements
 
 ```text
-0-based
-half-open
+Python 3
+numpy
+pandas
+matplotlib
 ```
 
-as expected by `bedtools`.
+## Reproducibility
 
----
-
-### 3. Repeat identifiers should be unique
-
-Column 4 (`repeat_id`) should ideally uniquely identify each repeat interval.
-
-If repeat IDs are not unique, the combination of:
-
-```text
-chr + start + end + repeat_id + repeat_class
-```
-
-is used as the region key.
-
----
-
-### 4. BAM and BED chromosome names must agree
-
-For example, do not mix:
-
-```text
-chr1
-```
-
-with:
-
-```text
-1
-```
-
-unless the files have first been standardized.
-
----
-
-### 5. Normalization is alignment-based in this pipeline
-
-For paired-end BAM files, each primary mapped alignment contributes to the primary-mapping count.
-
-Therefore the normalization denominator is:
-
-```text
-primary mapped alignments
-```
-
-rather than:
-
-```text
-mapped read pairs
-```
-
-or:
-
-```text
-mapped fragments
-```
-
-This is intentional and should be kept consistent across all samples.
-
----
-
-## Recommended sanity checks
-
-After running the pipeline, inspect:
-
-```bash
-cat P12_repeat_analysis/stats/primary_mapped_counts.tsv
-```
-
-Check the number of repeat intervals:
-
-```bash
-wc -l P12_repeat_analysis/repeat_AUC/HC1.repeat_AUC.tsv
-wc -l P12_repeat_analysis/repeat_AUC/HC2.repeat_AUC.tsv
-wc -l P12_repeat_analysis/repeat_AUC/P12.repeat_AUC.tsv
-```
-
-These should contain the same number of rows.
-
-Check the number of differential regions:
-
-```bash
-wc -l P12_repeat_analysis/P12.differential_repeat_regions.tsv
-```
-
-Inspect the repeat-class summary:
-
-```bash
-column -t -s $'\t' \
-    P12_repeat_analysis/P12.differential_repeat_class_AUC.tsv \
-    | less -S
-```
-
----
-
-## Main result
-
-For most downstream analyses, the main output is:
-
-```text
-PATIENT.differential_repeat_class_AUC.tsv
-```
-
-For example:
-
-```text
-P12_repeat_analysis/P12.differential_repeat_class_AUC.tsv
-```
-
-This table contains the summed normalized AUC values for all differential repeat regions within each repeat class.
+The upstream primary-mapping AUC calculation and downstream distribution-based summary should be kept together with the RepeatMasker BED file used for the analysis so that the complete workflow can be reproduced from the original BAM files.
