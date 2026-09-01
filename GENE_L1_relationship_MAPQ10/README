@@ -1,0 +1,845 @@
+# Strand-specific L1 transcription and gene-context analysis
+
+This workflow quantifies **L1-sense** and **L1-antisense** RNA reads in P12 and P15 PBMC samples, annotates the corresponding L1 loci relative to human genes, and plots the read-weighted genomic composition of the expressed L1 regions.
+
+The workflow has three main stages:
+
+1. **Linux / O2:** intersect RepeatMasker L1 regions with human genes, split L1 loci by genomic strand, retain reads with `MAPQ >= 10`, and generate strand-specific `*.final.bed` files.
+2. **R / ChIPseeker:** annotate the final L1 BED files relative to hg38 genes.
+3. **Jupyter / Python:** generate read-weighted 100% stacked-bar plots of genomic annotation composition.
+
+---
+
+## 1. Linux: L1/gene intersection and strand-specific read counting
+
+### Requirements
+
+The analysis was run on HMS O2 with:
+
+```text
+gcc/14.2.0
+samtools/1.21
+bedtools/2.31.0
+```
+
+Input annotation files:
+
+```text
+Repeatmasker_IGV_magic_L1.bed (download link: https://drive.google.com/file/d/1yQtQWtg-UbY7B8iZSrHm05SUwmYZZ4T5/view?usp=sharing)
+Human_genes.bed (download link: https://drive.google.com/file/d/1g3weBo8DpMhaK72EyGS6WymzD8xvCxeo/view?usp=sharing)
+```
+
+The RepeatMasker BED contains the L1 genomic strand in column 6.
+
+### 1.1 Extract L1 regions and intersect with human genes
+
+First, retain L1-containing RepeatMasker intervals and keep the original first six BED columns:
+
+```bash
+module load gcc/14.2.0
+module load bedtools/2.31.0
+
+awk 'BEGIN{FS=OFS="\t"}
+{
+    sub(/\r$/, "", $0)
+
+    if ($4 ~ /L1/)
+        print $1,$2,$3,$4,$5,$6
+}' Repeatmasker_IGV_magic_L1.bed \
+> Repbase_L1.bed
+```
+
+Intersect the L1 intervals with `Human_genes.bed`:
+
+```bash
+bedtools intersect \
+    -a Repbase_L1.bed \
+    -b Human_genes.bed \
+    -wao \
+> Repbase_L1_human_genes.bed
+```
+
+`-wao` retains all L1 loci, including those with no overlapping gene, and adds the number of overlapping bases as the final column.
+
+The resulting file contains:
+
+```text
+L1 BED columns
++
+Human_genes.bed columns
++
+overlap length
+```
+
+### 1.2 Split L1 loci by genomic strand
+
+Column 6 is the L1 strand:
+
+```bash
+awk '$6=="+"' Repbase_L1_human_genes.bed > L1_plus.bed
+awk '$6=="-"' Repbase_L1_human_genes.bed > L1_minus.bed
+```
+
+---
+
+### 1.3 Retain MAPQ >= 10 reads
+
+For this analysis, the operational uniquely-mappable read set was defined as alignments with:
+
+```text
+MAPQ >= 10
+```
+
+The P12a, P12b, P15a, and P15b PBMC plus- and minus-strand BAMs were filtered separately:
+
+```bash
+module load gcc/14.2.0
+module load samtools/1.21
+
+mkdir -p mapq10_bam
+
+samples=(
+    P12a
+    P12b
+    P15a
+    P15b
+)
+
+for sample in "${samples[@]}"
+do
+
+    plus_matches=( ${sample}*PBMC*_plus.bam )
+    minus_matches=( ${sample}*PBMC*_minus.bam )
+
+    if [ ${#plus_matches[@]} -ne 1 ]; then
+        echo "ERROR: expected exactly one plus BAM for ${sample}"
+        printf '%s\n' "${plus_matches[@]}"
+        exit 1
+    fi
+
+    if [ ${#minus_matches[@]} -ne 1 ]; then
+        echo "ERROR: expected exactly one minus BAM for ${sample}"
+        printf '%s\n' "${minus_matches[@]}"
+        exit 1
+    fi
+
+    plus_bam="${plus_matches[0]}"
+    minus_bam="${minus_matches[0]}"
+
+    samtools view \
+        -@ 4 \
+        -bh \
+        -q 10 \
+        "$plus_bam" \
+        > "mapq10_bam/${sample}_plus.mapq10.bam"
+
+    samtools index \
+        -@ 4 \
+        "mapq10_bam/${sample}_plus.mapq10.bam"
+
+    samtools view \
+        -@ 4 \
+        -bh \
+        -q 10 \
+        "$minus_bam" \
+        > "mapq10_bam/${sample}_minus.mapq10.bam"
+
+    samtools index \
+        -@ 4 \
+        "mapq10_bam/${sample}_minus.mapq10.bam"
+
+done
+```
+
+MAPQ is aligner-dependent; therefore, `MAPQ >= 10` is the operational threshold used in this workflow rather than a universal definition of unique mapping.
+
+---
+
+### 1.4 Merge replicate A + B
+
+The MAPQ-filtered replicate BAMs were merged within each patient and strand:
+
+```bash
+samtools merge -@ 4 -f \
+    mapq10_bam/P12_PBMC_mapq10_plus.bam \
+    mapq10_bam/P12a_plus.mapq10.bam \
+    mapq10_bam/P12b_plus.mapq10.bam
+
+samtools merge -@ 4 -f \
+    mapq10_bam/P12_PBMC_mapq10_minus.bam \
+    mapq10_bam/P12a_minus.mapq10.bam \
+    mapq10_bam/P12b_minus.mapq10.bam
+
+samtools merge -@ 4 -f \
+    mapq10_bam/P15_PBMC_mapq10_plus.bam \
+    mapq10_bam/P15a_plus.mapq10.bam \
+    mapq10_bam/P15b_plus.mapq10.bam
+
+samtools merge -@ 4 -f \
+    mapq10_bam/P15_PBMC_mapq10_minus.bam \
+    mapq10_bam/P15a_minus.mapq10.bam \
+    mapq10_bam/P15b_minus.mapq10.bam
+```
+
+---
+
+### 1.5 Generate L1-sense and L1-antisense final BED files
+
+L1 transcriptional direction is defined relative to the genomic strand of the L1 element:
+
+```text
+L1-sense:
+    + L1 with + strand reads
+    - L1 with - strand reads
+
+L1-antisense:
+    + L1 with - strand reads
+    - L1 with + strand reads
+```
+
+The script below counts reads overlapping each strand-specific L1 set, sorts by coordinate, removes duplicate genomic intervals while keeping the first occurrence, and retains loci with at least 10 reads.
+
+```bash
+#!/usr/bin/env bash
+
+module load gcc/14.2.0
+module load samtools/1.21
+module load bedtools/2.31.0
+
+BED_PLUS="L1_plus.bed"
+BED_MINUS="L1_minus.bed"
+
+MIN_READS=10
+
+run_one() {
+
+    local P="$1"   # P12 or P15
+    local T="PBMC"
+
+    local BAM_PLUS="mapq10_bam/${P}_${T}_mapq10_plus.bam"
+    local BAM_MINUS="mapq10_bam/${P}_${T}_mapq10_minus.bam"
+
+    echo "=== Processing ${P} ${T} ==="
+
+    cat \
+        <(bedtools coverage \
+            -a "$BED_PLUS" \
+            -b "$BAM_PLUS" \
+            -counts) \
+        <(bedtools coverage \
+            -a "$BED_MINUS" \
+            -b "$BAM_MINUS" \
+            -counts) \
+    | sort -k1,1 -k2,2n -k3,3n \
+    | awk -v m="$MIN_READS" '
+        {
+            key = $1 "\t" $2 "\t" $3
+
+            if (!seen[key]++) {
+                if ($NF >= m)
+                    print
+            }
+        }
+    ' \
+    > L1_sense_${P}_${T}.final.bed
+
+    cat \
+        <(bedtools coverage \
+            -a "$BED_PLUS" \
+            -b "$BAM_MINUS" \
+            -counts) \
+        <(bedtools coverage \
+            -a "$BED_MINUS" \
+            -b "$BAM_PLUS" \
+            -counts) \
+    | sort -k1,1 -k2,2n -k3,3n \
+    | awk -v m="$MIN_READS" '
+        {
+            key = $1 "\t" $2 "\t" $3
+
+            if (!seen[key]++) {
+                if ($NF >= m)
+                    print
+            }
+        }
+    ' \
+    > L1_antisense_${P}_${T}.final.bed
+}
+
+run_one P12
+run_one P15
+```
+
+Final BED outputs:
+
+```text
+L1_sense_P12_PBMC.final.bed
+L1_antisense_P12_PBMC.final.bed
+L1_sense_P15_PBMC.final.bed
+L1_antisense_P15_PBMC.final.bed
+```
+
+Because `L1_plus.bed` and `L1_minus.bed` already contain the L1/gene intersection information, the final BED files retain the L1 coordinates, L1 strand, overlapping gene information, overlap length, and the strand-specific read count in the final column.
+
+---
+
+## 2. R: annotate final L1 BED files with ChIPseeker
+
+### Requirements
+
+```r
+library("ChIPseeker")
+library("org.Hs.eg.db")
+library("TxDb.Hsapiens.UCSC.hg38.knownGene")
+library("openxlsx")
+```
+
+The hg38 KnownGene TxDb is used for genomic annotation. Promoter/TSS and downstream regions are defined within 3 kb.
+
+The four BED files can be processed with one loop:
+
+```r
+library("ChIPseeker")
+library("org.Hs.eg.db")
+library("TxDb.Hsapiens.UCSC.hg38.knownGene")
+library("openxlsx")
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+
+folder <- "C:/Users/Dylan/Desktop/R programs/Gene_annotation"
+
+samples <- c(
+    "L1_sense_P12_PBMC",
+    "L1_antisense_P12_PBMC",
+    "L1_sense_P15_PBMC",
+    "L1_antisense_P15_PBMC"
+)
+
+options(ChIPseeker.downstreamDistance = 3000)
+
+for (sample in samples) {
+
+    bed_in <- file.path(
+        folder,
+        paste0(sample, ".final.bed")
+    )
+
+    xlsx_out <- file.path(
+        folder,
+        paste0(sample, "2.xlsx")
+    )
+
+    testBed <- readPeakFile(
+        bed_in
+    )
+
+    peakAnno <- annotatePeak(
+        testBed,
+        tssRegion = c(-3000, 3000),
+        genomicAnnotationPriority = c(
+            "5UTR",
+            "3UTR",
+            "Promoter",
+            "Exon",
+            "Intron",
+            "Intergenic"
+        ),
+        TxDb = txdb,
+        annoDb = "org.Hs.eg.db"
+    )
+
+    write.xlsx(
+        as.data.frame(peakAnno),
+        xlsx_out,
+        rowNames = FALSE
+    )
+}
+```
+
+Annotated Excel outputs:
+
+```text
+L1_sense_P12_PBMC2.xlsx
+L1_antisense_P12_PBMC2.xlsx
+L1_sense_P15_PBMC2.xlsx
+L1_antisense_P15_PBMC2.xlsx
+```
+
+For the files generated in this workflow, the columns subsequently used for plotting are:
+
+```text
+V6          L1 genomic strand
+V12         overlapping gene strand
+V14         strand-specific L1 read count
+annotation  ChIPseeker genomic annotation
+seqnames    chromosome
+```
+
+---
+
+## 3. Jupyter: read-weighted genomic composition plot
+
+The final plot is calculated from the ChIPseeker-annotated Excel file.
+
+The plot is **weighted by the sum of `V14` reads**, rather than by the number of L1 loci.
+
+Two strand relationships are represented in the analysis:
+
+1. **L1-sense versus L1-antisense RNA** was defined in the Linux step by comparing read strand with the L1 strand.
+2. Within each resulting L1-sense or L1-antisense file, the L1 genomic strand is compared with the overlapping gene strand:
+   - `++` or `--`: L1 and gene directions agree
+   - `+-` or `-+`: L1 and gene directions disagree
+
+In the plotting code, these second-level classes are labeled `_sense` and `_antisense`, respectively, and are shown as darker and lighter shades of the same annotation color.
+
+### Python requirements
+
+```text
+Python 3
+pandas
+numpy
+matplotlib
+openpyxl
+```
+
+### Jupyter code
+
+Change `xlsx_in` and `TITLE` to plot any of the four annotated datasets.
+
+```python
+import pandas as pd
+import numpy as np
+import re
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+# =========================
+# SETTINGS
+# =========================
+xlsx_in = "L1_antisense_P15_PBMC2.xlsx"
+
+V14_MIN = 10
+
+xlsx_out = xlsx_in.replace(
+    ".xlsx",
+    f"_noAlt_V14ge{V14_MIN}.xlsx"
+)
+
+DIR_COL = "V12"
+WEIGHTCOL = "V14"
+ANN_COL = "annotation"
+TE_STRAND_COL = "V6"
+SEQ_COL = "seqnames"
+
+TITLE = (
+    "L1_antisense_P15_PBMC composition\n"
+    "(Intron / UTR / Promoter / Exon / Downstream "
+    "split by sense vs antisense)"
+)
+
+# =========================
+# GLOBAL STYLE
+# =========================
+mpl.rcParams["font.family"] = "Arial"
+mpl.rcParams["font.sans-serif"] = ["Arial"]
+mpl.rcParams["font.size"] = 14
+mpl.rcParams["figure.facecolor"] = "white"
+mpl.rcParams["axes.facecolor"] = "white"
+mpl.rcParams["savefig.facecolor"] = "white"
+
+# =========================
+# HELPERS
+# =========================
+def is_primary_chr(seqname: str) -> bool:
+    s = str(seqname)
+
+    if s in ["chrX", "chrY"]:
+        return True
+
+    if s.startswith("chr"):
+        tail = s[3:]
+        return tail.isdigit() and (1 <= int(tail) <= 22)
+
+    return False
+
+
+def clean_annotation(a: str) -> str:
+
+    if pd.isna(a):
+        return "Unknown"
+
+    s = str(a).strip()
+
+    if s.startswith("Distal Intergenic"):
+        return "Distal Intergenic"
+
+    if s.startswith("Promoter"):
+        return "Promoter"
+
+    if s.startswith("Downstream"):
+        return "Downstream"
+
+    if s.startswith("Exon"):
+        return "Exon"
+
+    if "Intron" in s:
+        return "Intron"
+
+    if "5' UTR" in s or "5′ UTR" in s:
+        return "5UTR"
+
+    if "3' UTR" in s or "3′ UTR" in s:
+        return "3UTR"
+
+    return "Other"
+
+
+def classify_sense_antisense(
+    te_strand: str,
+    gene_strand: str
+) -> str:
+
+    t = str(te_strand).strip()
+    g = str(gene_strand).strip()
+
+    if t not in ["+", "-"] or g not in ["+", "-"]:
+        return "unknown"
+
+    return t + g
+
+
+def split_bucket(
+    base_class: str,
+    pair: str
+) -> str:
+
+    split_these = [
+        "Intron",
+        "5UTR",
+        "3UTR",
+        "Promoter",
+        "Exon",
+        "Downstream"
+    ]
+
+    if base_class not in split_these:
+        return base_class
+
+    if pair in ["++", "--"]:
+        return f"{base_class}_sense"
+
+    if pair in ["+-", "-+"]:
+        return f"{base_class}_antisense"
+
+    return f"{base_class}_unknown"
+
+
+# =========================
+# LOAD
+# =========================
+df = pd.read_excel(
+    xlsx_in
+)
+
+for c in [
+    SEQ_COL,
+    DIR_COL,
+    WEIGHTCOL,
+    ANN_COL,
+    TE_STRAND_COL
+]:
+    if c not in df.columns:
+        raise KeyError(
+            f"Missing column: {c}"
+        )
+
+
+# =========================
+# DROP ALT CONTIGS
+# =========================
+before = len(df)
+
+df = df[
+    df[SEQ_COL].map(
+        is_primary_chr
+    )
+].copy()
+
+print(
+    f"Dropped alt contigs: "
+    f"{before - len(df)}"
+)
+
+
+# =========================
+# FILTER BY READ COUNT
+# =========================
+before_v14 = len(df)
+
+df[WEIGHTCOL] = pd.to_numeric(
+    df[WEIGHTCOL],
+    errors="coerce"
+)
+
+df = df[
+    df[WEIGHTCOL]
+    .fillna(-np.inf) >= V14_MIN
+].copy()
+
+print(
+    f"Dropped by {WEIGHTCOL} < {V14_MIN}: "
+    f"{before_v14 - len(df)}"
+)
+
+df.to_excel(
+    xlsx_out,
+    index=False
+)
+
+print(
+    f"Saved filtered file: {xlsx_out}"
+)
+
+
+# =========================
+# BUILD STACK CLASSES
+# =========================
+df["base_class"] = (
+    df[ANN_COL]
+    .map(clean_annotation)
+)
+
+df["pair"] = [
+    classify_sense_antisense(t, g)
+    for t, g in zip(
+        df[TE_STRAND_COL],
+        df[DIR_COL]
+    )
+]
+
+df["stack_class"] = [
+    split_bucket(b, p)
+    for b, p in zip(
+        df["base_class"],
+        df["pair"]
+    )
+]
+
+
+# =========================
+# WEIGHTED PERCENTAGES
+# =========================
+w = df[WEIGHTCOL].fillna(0.0)
+
+total_w = float(
+    w.sum()
+)
+
+if total_w <= 0:
+    raise RuntimeError(
+        "Total V14 weight is 0; "
+        "cannot compute percentages."
+    )
+
+class_sum = (
+    df.groupby(
+        "stack_class"
+    )[WEIGHTCOL]
+    .sum()
+)
+
+pct = (
+    class_sum /
+    total_w
+) * 100.0
+
+
+# =========================
+# ORDER + COLORS
+# =========================
+order = [
+    "Distal Intergenic",
+
+    "Intron_sense",
+    "Intron_antisense",
+
+    "Promoter_sense",
+    "Promoter_antisense",
+
+    "Downstream_sense",
+    "Downstream_antisense",
+
+    "Exon_sense",
+    "Exon_antisense",
+
+    "5UTR_sense",
+    "5UTR_antisense",
+
+    "3UTR_sense",
+    "3UTR_antisense",
+]
+
+colors = {
+    "Distal Intergenic": "#7f7f7f",
+
+    "Intron_sense": "#1f77b4",
+    "Intron_antisense": "#9ecae1",
+
+    "Promoter_sense": "#d62728",
+    "Promoter_antisense": "#f4a6a6",
+
+    "Downstream_sense": "#ff7f0e",
+    "Downstream_antisense": "#ffbb78",
+
+    "Exon_sense": "#2ca02c",
+    "Exon_antisense": "#98df8a",
+
+    "5UTR_sense": "#9467bd",
+    "5UTR_antisense": "#c7b9e6",
+
+    "3UTR_sense": "#8c564b",
+    "3UTR_antisense": "#c7a9a3",
+}
+
+
+# =========================
+# PLOT
+# =========================
+fig, ax = plt.subplots(
+    figsize=(6.8, 7.8)
+)
+
+bottom = 0.0
+
+# Draw in reverse so Distal Intergenic is on top.
+for cls in reversed(order):
+
+    if cls in pct.index and pct[cls] > 0:
+
+        ax.bar(
+            [0],
+            [pct[cls]],
+            bottom=bottom,
+            color=colors.get(
+                cls,
+                "#bbbbbb"
+            ),
+            label=(
+                f"{cls} "
+                f"({pct[cls]:.1f}%)"
+            )
+        )
+
+        bottom += float(
+            pct[cls]
+        )
+
+ax.set_ylim(
+    0,
+    100
+)
+
+ax.set_xticks(
+    [0]
+)
+
+ax.set_xticklabels(
+    [
+        xlsx_in.replace(
+            ".xlsx",
+            ""
+        )
+    ]
+)
+
+ax.set_ylabel(
+    "Percent (%)"
+)
+
+ax.set_title(
+    TITLE,
+    pad=20
+)
+
+handles, labels = (
+    ax.get_legend_handles_labels()
+)
+
+ax.legend(
+    handles[::-1],
+    labels[::-1],
+    bbox_to_anchor=(1.02, 1),
+    loc="upper left",
+    frameon=False
+)
+
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## Interpretation of the plot
+
+Each bar represents 100% of the retained strand-specific L1 reads in that dataset.
+
+For example, for:
+
+```text
+L1_antisense_P15_PBMC2.xlsx
+```
+
+the bar represents L1-antisense reads in P15 PBMC.
+
+The height of each segment is:
+
+```text
+sum of V14 reads in that annotation/orientation class
+------------------------------------------------------ × 100
+sum of V14 reads across all retained classes
+```
+
+For Intron, Promoter, Downstream, Exon, 5′ UTR, and 3′ UTR:
+
+```text
+dark shade  = L1 strand agrees with gene strand
+light shade = L1 strand disagrees with gene strand
+```
+
+Distal Intergenic is retained as a single unsplit category.
+
+---
+
+## Workflow summary
+
+```text
+Repeatmasker_IGV_magic_L1.bed
+            +
+      Human_genes.bed
+            |
+            v
+Repbase_L1_human_genes.bed
+            |
+      +-----+-----+
+      |           |
+      v           v
+ L1_plus.bed  L1_minus.bed
+      |           |
+      +-----+-----+
+            |
+     MAPQ >= 10 BAMs
+            |
+            v
+ L1-sense / L1-antisense
+      *.final.bed files
+            |
+            v
+     ChIPseeker / hg38
+            |
+            v
+       annotated XLSX
+            |
+            v
+ read-weighted 100% stacked
+   genomic composition plot
+```
