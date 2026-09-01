@@ -100,3 +100,46 @@ Similar LFC-shrinkage approaches have been used in published TE-expression studi
 
 * Jupyter Notebook
 * Python 3
+
+---
+
+## 6. L1 Transcriptional Direction and Gene Relationship Analysis
+
+The `GENE_L1_relationship_MAPQ10` analysis examines the genomic context and transcriptional direction of expressed **LINE-1 (L1)** loci.
+
+The pipeline:
+
+* Intersects RepeatMasker L1 regions with human gene annotations.
+* Separates L1 loci by genomic plus and minus strand.
+* Filters strand-specific RNA-seq alignments using `MAPQ >= 10`.
+* Quantifies reads corresponding to **L1-sense** and **L1-antisense** transcription.
+* Retains L1 loci supported by at least 10 reads.
+* Annotates expressed L1 loci relative to genes using **ChIPseeker** and the hg38 KnownGene annotation.
+* Compares L1 genomic orientation with gene orientation within intronic, exonic, promoter, downstream, and UTR regions.
+* Generates read-weighted genomic composition plots in Jupyter Notebook.
+
+**Input annotations:**
+
+* `Repeatmasker_IGV_magic_L1.bed`
+* `Human_genes.bed`
+
+**Environment:**
+
+* HMS O2 computing cluster
+* R
+* Jupyter Notebook / Python 3
+
+**Required software/packages:**
+
+* gcc (v14.2.0)
+* samtools (v1.21)
+* bedtools (v2.31.0)
+* ChIPseeker
+* org.Hs.eg.db
+* TxDb.Hsapiens.UCSC.hg38.knownGene
+* openxlsx
+* pandas
+* numpy
+* matplotlib
+
+Additional methodological details and scripts are provided in the README within the `GENE_L1_relationship_MAPQ10` directory.
