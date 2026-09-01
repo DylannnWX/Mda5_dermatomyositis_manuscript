@@ -1,0 +1,25 @@
+library("ChIPseeker")
+library("org.Hs.eg.db")
+library("TxDb.Hsapiens.UCSC.hg38.knownGene")
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+library(openxlsx)
+
+P12_PBMC_sense <- readPeakFile("Your_path/L1_sense_P12_PBMC.final.bed")
+options(ChIPseeker.downstreamDistance = 3000)
+peakAnno <- annotatePeak(testBed, tssRegion=c(-3000, 3000), genomicAnnotationPriority = c("5UTR", "3UTR", "Promoter", "Exon", "Intron", "Intergenic"), TxDb=txdb, annoDb="org.Hs.eg.db")
+write.xlsx(peakAnno, "Your_path/L1_sense_P12_PBMC.xlsx", rowNames = FALSE)
+
+P12_PBMC_antisense <- readPeakFile("Your_path/L1_antisense_P12_PBMC.final.bed")
+options(ChIPseeker.downstreamDistance = 3000)
+peakAnno <- annotatePeak(testBed, tssRegion=c(-3000, 3000), genomicAnnotationPriority = c("5UTR", "3UTR", "Promoter", "Exon", "Intron", "Intergenic"), TxDb=txdb, annoDb="org.Hs.eg.db")
+write.xlsx(peakAnno, "Your_path/L1_antisense_P12_PBMC.xlsx", rowNames = FALSE)
+
+P15_PBMC_sense <- readPeakFile("Your_path/L1_sense_P15_PBMC.final.bed")
+options(ChIPseeker.downstreamDistance = 3000)
+peakAnno <- annotatePeak(testBed, tssRegion=c(-3000, 3000), genomicAnnotationPriority = c("5UTR", "3UTR", "Promoter", "Exon", "Intron", "Intergenic"), TxDb=txdb, annoDb="org.Hs.eg.db")
+write.xlsx(peakAnno, "Your_path/L1_sense_P15_PBMC.xlsx", rowNames = FALSE)
+
+P15_PBMC_antisense <- readPeakFile("Your_path/L1_antisense_P15_PBMC.final.bed")
+options(ChIPseeker.downstreamDistance = 3000)
+peakAnno <- annotatePeak(testBed, tssRegion=c(-3000, 3000), genomicAnnotationPriority = c("5UTR", "3UTR", "Promoter", "Exon", "Intron", "Intergenic"), TxDb=txdb, annoDb="org.Hs.eg.db")
+write.xlsx(peakAnno, "Your_path/L1_antisense_P15_PBMC.xlsx", rowNames = FALSE)
