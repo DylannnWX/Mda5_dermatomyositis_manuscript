@@ -1,0 +1,215 @@
+#Here we use P15 PBMC, antisense as an example. You can change the inputs to sense, or P12 PBMC by the .xlsx outputs from step 02. Make sure to upload the plot labels too if you changed groups. 
+
+import pandas as pd
+import numpy as np
+import re
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+# =========================
+# SETTINGS
+# =========================
+xlsx_in  = "L1_antisense_P15_PBMC.xlsx"   # <-- your input
+xlsx_out = xlsx_in.replace(".xlsx", "_noAlt_V14ge20.xlsx") #<-- this cleans up the datasheet a bit
+
+V14_MIN = 10              # filter threshold
+
+DIR_COL   = "V12"         # gene direction (+ / -)
+WEIGHTCOL = "V14"         # weighted sum column
+ANN_COL   = "annotation"
+TE_STRAND_COL = "V6"      # TE strand
+SEQ_COL = "seqnames"
+
+TITLE = "L1_antisense_P15_PBMC composition \n(Intron / UTR / Promoter / Exon / Downstream split by sense vs antisense)"
+
+# =========================
+# GLOBAL STYLE
+# =========================
+mpl.rcParams["font.family"] = "Arial"
+mpl.rcParams["font.sans-serif"] = ["Arial"]
+mpl.rcParams["font.size"] = 14
+mpl.rcParams["figure.facecolor"] = "white"
+mpl.rcParams["axes.facecolor"] = "white"
+mpl.rcParams["savefig.facecolor"] = "white"
+
+# =========================
+# HELPERS
+# =========================
+def is_primary_chr(seqname: str) -> bool:
+    s = str(seqname)
+    if s in ["chrX", "chrY"]:
+        return True
+    if s.startswith("chr"):
+        tail = s[3:]
+        return tail.isdigit() and (1 <= int(tail) <= 22)
+    return False
+
+def clean_annotation(a: str) -> str:
+    if pd.isna(a):
+        return "Unknown"
+    s = str(a).strip()
+    if s.startswith("Distal Intergenic"):
+        return "Distal Intergenic"
+    if s.startswith("Promoter"):
+        return "Promoter"
+    if s.startswith("Downstream"):
+        return "Downstream"
+    if s.startswith("Exon"):
+        return "Exon"
+    if "Intron" in s:
+        return "Intron"
+    if "5' UTR" in s or "5\u2032 UTR" in s:
+        return "5UTR"
+    if "3' UTR" in s or "3\u2032 UTR" in s:
+        return "3UTR"
+    return "Other"
+
+def classify_sense_antisense(te_strand: str, gene_strand: str) -> str:
+    t = str(te_strand).strip()
+    g = str(gene_strand).strip()
+    if t not in ["+","-"] or g not in ["+","-"]:
+        return "unknown"
+    return t + g
+
+def split_bucket(base_class: str, pair: str) -> str:
+    # NOW includes Exon + Downstream split too
+    split_these = ["Intron", "5UTR", "3UTR", "Promoter", "Exon", "Downstream"]
+    if base_class not in split_these:
+        return base_class
+    if pair in ["++", "--"]:
+        return f"{base_class}_sense"
+    if pair in ["+-", "-+"]:
+        return f"{base_class}_antisense"
+    return f"{base_class}_unknown"
+
+# =========================
+# LOAD
+# =========================
+df = pd.read_excel(xlsx_in)
+
+for c in [SEQ_COL, DIR_COL, WEIGHTCOL, ANN_COL, TE_STRAND_COL]:
+    if c not in df.columns:
+        raise KeyError(f"Missing column: {c}")
+
+# -------------------------
+# drop alt contigs
+# -------------------------
+before = len(df)
+df = df[df[SEQ_COL].map(is_primary_chr)].copy()
+print(f"Dropped alt contigs: {before - len(df)}")
+
+# -------------------------
+# filter by V14
+# -------------------------
+before_v14 = len(df)
+df[WEIGHTCOL] = pd.to_numeric(df[WEIGHTCOL], errors="coerce")
+df = df[df[WEIGHTCOL].fillna(-np.inf) >= V14_MIN].copy()
+print(f"Dropped by V14 < {V14_MIN}: {before_v14 - len(df)}")
+
+df.to_excel(xlsx_out, index=False)
+print(f"Saved filtered file: {xlsx_out}")
+
+# =========================
+# BUILD STACK CLASSES
+# =========================
+df["base_class"] = df[ANN_COL].map(clean_annotation)
+df["pair"] = [classify_sense_antisense(t, g) for t, g in zip(df[TE_STRAND_COL], df[DIR_COL])]
+df["stack_class"] = [split_bucket(b, p) for b, p in zip(df["base_class"], df["pair"])]
+
+# =========================
+# WEIGHTED PERCENTAGES
+# =========================
+w = df[WEIGHTCOL].fillna(0.0)
+total_w = float(w.sum())
+if total_w <= 0:
+    raise RuntimeError("Total V14 weight is 0; cannot compute percentages.")
+
+class_sum = df.groupby("stack_class")[WEIGHTCOL].sum()
+pct = (class_sum / total_w) * 100.0
+
+# =========================
+# ORDER + COLORS
+# =========================
+order = [
+    "Distal Intergenic",
+
+    "Intron_sense",
+    "Intron_antisense",
+
+    "Promoter_sense",
+    "Promoter_antisense",
+
+    "Downstream_sense",
+    "Downstream_antisense",
+
+    "Exon_sense",
+    "Exon_antisense",
+
+    "5UTR_sense",
+    "5UTR_antisense",
+
+    "3UTR_sense",
+    "3UTR_antisense",
+]
+
+colors = {
+    "Distal Intergenic": "#7f7f7f",
+
+    "Intron_sense": "#1f77b4",
+    "Intron_antisense": "#9ecae1",
+
+    "Promoter_sense": "#d62728",
+    "Promoter_antisense": "#f4a6a6",
+
+    # Downstream: orange (sense) + lighter orange (antisense)
+    "Downstream_sense": "#ff7f0e",
+    "Downstream_antisense": "#ffbb78",
+
+    # Exon: green (sense) + lighter green (antisense)
+    "Exon_sense": "#2ca02c",
+    "Exon_antisense": "#98df8a",
+
+    "5UTR_sense": "#9467bd",
+    "5UTR_antisense": "#c7b9e6",
+
+    "3UTR_sense": "#8c564b",
+    "3UTR_antisense": "#c7a9a3",
+}
+
+# =========================
+# PLOT
+# =========================
+fig, ax = plt.subplots(figsize=(6.8, 7.8))
+bottom = 0.0
+
+# draw reversed so Distal Intergenic ends on TOP
+for cls in reversed(order):
+    if cls in pct.index and pct[cls] > 0:
+        ax.bar(
+            [0],
+            [pct[cls]],
+            bottom=bottom,
+            color=colors.get(cls, "#bbbbbb"),
+            label=f"{cls} ({pct[cls]:.1f}%)"
+        )
+        bottom += float(pct[cls])
+
+ax.set_ylim(0, 100)
+ax.set_xticks([0])
+ax.set_xticklabels([xlsx_in.replace(".xlsx", "")])
+ax.set_ylabel("Percent (%)")
+ax.set_title(TITLE, pad=20)
+
+# legend order: Distal Intergenic at top (same as bar top→bottom)
+handles, labels = ax.get_legend_handles_labels()
+ax.legend(
+    handles[::-1],
+    labels[::-1],
+    bbox_to_anchor=(1.02, 1),
+    loc="upper left",
+    frameon=False
+)
+
+plt.tight_layout()
+plt.show()
+
