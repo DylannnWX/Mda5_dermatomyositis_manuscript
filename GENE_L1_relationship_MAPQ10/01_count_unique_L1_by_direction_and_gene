@@ -1,0 +1,199 @@
+module load gcc/14.2.0
+module load bedtools/2.31.0
+
+ANNOT="Repeatmasker_IGV_magic_L1.bed"
+GENES="Human_genes.bed"
+
+
+# ============================================================
+# 1. Extract L1 regions
+#
+# Keep the original first 6 BED columns.
+# Use "L1" in column 4 so this also retains entries such as:
+#   LINE/L1_L1MB3_5_L1
+#   Unknown_L1M5a
+# as seen in the original Repbase_L1_human_genes.bed
+# ============================================================
+
+awk 'BEGIN{FS=OFS="\t"}
+{
+    sub(/\r$/, "", $0)
+
+    if ($4 ~ /L1/)
+        print $1,$2,$3,$4,$5,$6
+}' "$ANNOT" \
+> Repbase_L1.bed
+
+
+# ============================================================
+# 2. Intersect L1 regions with human genes
+#
+# -wao:
+#   keeps ALL L1 regions
+#   adds the matching Human_genes.bed columns
+#   final column = number of overlapping bp
+#
+# Non-overlapping L1s are also retained.
+# ============================================================
+
+bedtools intersect \
+    -a Repbase_L1.bed \
+    -b "$GENES" \
+    -wao \
+> Repbase_L1_human_genes.bed
+
+
+# ============================================================
+# 3. Separate L1 regions by L1 genomic strand
+#
+# Column 6 is still the L1 strand.
+# ============================================================
+
+awk '$6=="+"' Repbase_L1_human_genes.bed \
+> L1_plus.bed
+
+awk '$6=="-"' Repbase_L1_human_genes.bed \
+> L1_minus.bed
+
+
+#These bam files were filtered by MAPQ >=10, and then replicates merged. 
+
+module load samtools/1.21
+
+# ============================================================
+# Merge replicate A + B for each patient and strand
+# ============================================================
+
+samtools merge -@ 4 -f \
+    mapq10_bam/P12_PBMC_mapq10_plus.bam \
+    mapq10_bam/P12a_plus.mapq10.bam \
+    mapq10_bam/P12b_plus.mapq10.bam
+
+samtools merge -@ 4 -f \
+    mapq10_bam/P12_PBMC_mapq10_minus.bam \
+    mapq10_bam/P12a_minus.mapq10.bam \
+    mapq10_bam/P12b_minus.mapq10.bam
+
+
+samtools merge -@ 4 -f \
+    mapq10_bam/P15_PBMC_mapq10_plus.bam \
+    mapq10_bam/P15a_plus.mapq10.bam \
+    mapq10_bam/P15b_plus.mapq10.bam
+
+samtools merge -@ 4 -f \
+    mapq10_bam/P15_PBMC_mapq10_minus.bam \
+    mapq10_bam/P15a_minus.mapq10.bam \
+    mapq10_bam/P15b_minus.mapq10.bam
+
+
+# ============================================================
+# Index
+# ============================================================
+
+samtools index -@ 4 mapq10_bam/P12_PBMC_mapq10_plus.bam
+samtools index -@ 4 mapq10_bam/P12_PBMC_mapq10_minus.bam
+
+samtools index -@ 4 mapq10_bam/P15_PBMC_mapq10_plus.bam
+samtools index -@ 4 mapq10_bam/P15_PBMC_mapq10_minus.bam
+
+
+# And then here we analyze P12 and P15 PBMC
+
+BED_PLUS="L1_plus.bed"
+BED_MINUS="L1_minus.bed"
+
+MIN_READS=10
+
+
+# ============================================================
+# Process one patient
+# ============================================================
+
+run_one() {
+
+    local P="$1"   # P12 or P15
+    local T="PBMC"
+
+    local BAM_PLUS="mapq10_bam/${P}_${T}_mapq10_plus.bam"
+    local BAM_MINUS="mapq10_bam/${P}_${T}_mapq10_minus.bam"
+
+    echo "=== Processing ${P} ${T} ==="
+
+
+    # ========================================================
+    # L1 SENSE
+    #
+    # + L1 with + reads
+    # - L1 with - reads
+    #
+    # Then:
+    #   sort
+    #   deduplicate by chr/start/end, keeping FIRST
+    #   retain >=10 reads
+    # ========================================================
+
+    cat \
+        <(bedtools coverage \
+            -a "$BED_PLUS" \
+            -b "$BAM_PLUS" \
+            -counts) \
+        <(bedtools coverage \
+            -a "$BED_MINUS" \
+            -b "$BAM_MINUS" \
+            -counts) \
+    | sort -k1,1 -k2,2n -k3,3n \
+    | awk -v m="$MIN_READS" '
+        {
+            key = $1 "\t" $2 "\t" $3
+
+            if (!seen[key]++) {
+                if ($NF >= m)
+                    print
+            }
+        }
+    ' \
+    > L1_sense_${P}_${T}.final.bed
+
+
+    # ========================================================
+    # L1 ANTISENSE
+    #
+    # + L1 with - reads
+    # - L1 with + reads
+    #
+    # Then:
+    #   sort
+    #   deduplicate by chr/start/end, keeping FIRST
+    #   retain >=10 reads
+    # ========================================================
+
+    cat \
+        <(bedtools coverage \
+            -a "$BED_PLUS" \
+            -b "$BAM_MINUS" \
+            -counts) \
+        <(bedtools coverage \
+            -a "$BED_MINUS" \
+            -b "$BAM_PLUS" \
+            -counts) \
+    | sort -k1,1 -k2,2n -k3,3n \
+    | awk -v m="$MIN_READS" '
+        {
+            key = $1 "\t" $2 "\t" $3
+
+            if (!seen[key]++) {
+                if ($NF >= m)
+                    print
+            }
+        }
+    ' \
+    > L1_antisense_${P}_${T}.final.bed
+}
+
+
+# ============================================================
+# Run P12 and P15 PBMC
+# ============================================================
+
+run_one P12
+run_one P15
