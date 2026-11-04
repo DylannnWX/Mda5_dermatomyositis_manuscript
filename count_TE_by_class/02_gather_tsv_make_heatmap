@@ -32,6 +32,7 @@ CHUNK_SIZE = 100_000
 
 FC_CAP = 8.0
 BIN_WIDTH = 0.20
+PEAK_HALF_WINDOW = 1.0  # Include histogram bins within +/-1 log2FC of peak
 
 FC_EDGES = np.linspace(
     -FC_CAP,
@@ -209,51 +210,28 @@ def safe_log2fc(
 
 
 # ============================================================
-# Regional score from histogram
+# Peak-centered regional score
 # ============================================================
 
-def histogram_position(
-    hist,
-    centers,
-    fraction
-):
+def peak_centered_score(signal_hist, signal_x_hist):
+    """Mean of actual regional log2FC values in bins near dominant AUC peak.
 
-    hist = np.asarray(
-        hist,
-        dtype=float
-    )
-
-    centers = np.asarray(
-        centers,
-        dtype=float
-    )
-
-
-    total = hist.sum()
-
-    if total <= 0:
+    signal_hist[b] = sum(mean_AUC_i) in bin b
+    signal_x_hist[b] = sum(mean_AUC_i * log2FC_i) in bin b
+    The selection is based on histogram BIN CENTERS, keeping computation
+    one-pass and memory-efficient for large region files.
+    """
+    if not np.isfinite(signal_hist).all() or signal_hist.sum() <= 0:
         return np.nan
 
+    peak_index = int(np.argmax(signal_hist))
+    peak_center = FC_CENTERS[peak_index]
+    selected = np.abs(FC_CENTERS - peak_center) <= PEAK_HALF_WINDOW + 1e-9
+    denominator = signal_hist[selected].sum()
+    if denominator <= 0:
+        return np.nan
 
-    cumulative = np.cumsum(
-        hist
-    )
-
-
-    idx = np.searchsorted(
-        cumulative,
-        fraction * total
-    )
-
-
-    idx = np.clip(
-        idx,
-        0,
-        len(centers) - 1
-    )
-
-
-    return centers[idx]
+    return signal_x_hist[selected].sum() / denominator
 
 
 # ============================================================
@@ -322,19 +300,21 @@ def calculate_tissue(
         )
 
 
+    # Accumulate both the AUC mass and the AUC * log2FC sum per bin.
+    # The second array allows the final score to use the actual log2FC
+    # of each locus instead of approximating each locus by its bin center.
     histograms = {
-
         patient: {
-
-            category:
-                np.zeros(
-                    len(FC_CENTERS),
-                    dtype=np.float64
-                )
-
+            category: np.zeros(len(FC_CENTERS), dtype=np.float64)
             for category in CATEGORIES
         }
-
+        for patient in patients
+    }
+    histogram_log2fc_sums = {
+        patient: {
+            category: np.zeros(len(FC_CENTERS), dtype=np.float64)
+            for category in CATEGORIES
+        }
         for patient in patients
     }
 
@@ -491,20 +471,17 @@ def calculate_tissue(
                     continue
 
 
-                signal_histogram, _ = (
-                    np.histogram(
-                        region_log2fc[mask],
-                        bins=FC_EDGES,
-                        weights=mean_auc[mask]
-                    )
+                region_fc = region_log2fc[mask]
+                region_signal = mean_auc[mask]
+                signal_histogram, _ = np.histogram(
+                    region_fc, bins=FC_EDGES, weights=region_signal
                 )
-
-
-                histograms[
-                    patient
-                ][category] += (
-                    signal_histogram
+                log2fc_sum_histogram, _ = np.histogram(
+                    region_fc, bins=FC_EDGES,
+                    weights=region_signal * region_fc
                 )
+                histograms[patient][category] += signal_histogram
+                histogram_log2fc_sums[patient][category] += log2fc_sum_histogram
 
 
     for rep, iterator in (
@@ -541,30 +518,9 @@ def calculate_tissue(
             )
 
 
-            upper_position = (
-                histogram_position(
-                    hist,
-                    FC_CENTERS,
-                    0.61
-                )
-            )
-
-
-            lower_position = (
-                histogram_position(
-                    hist,
-                    FC_CENTERS,
-                    0.39
-                )
-            )
-
-
-            scores.loc[
-                patient,
-                category
-            ] = (
-                upper_position +
-                lower_position
+            scores.loc[patient, category] = peak_centered_score(
+                hist,
+                histogram_log2fc_sums[patient][category]
             )
 
 
@@ -827,7 +783,7 @@ cbar = fig.colorbar(
 
 
 cbar.set_label(
-    "Regional log2FC score",
+    "Peak-centered regional log2FC",
     fontsize=11
 )
 
