@@ -1,22 +1,21 @@
-# Primary-mapping RepeatMasker AUC and AUC-weighted analysis
+# Primary-mapping RepeatMasker analysis
 
-This workflow quantifies RepeatMasker-region signal from primary-mapped reads and summarizes LINE, SINE, and ERV changes from the AUC-weighted distribution of region-level log2 fold changes.
+This workflow quantifies RepeatMasker-region signals from primary-mapped reads and summarizes changes in LINE, SINE, and ERV elements between patient and healthy control samples.
 
 ## 1. Region-level AUC tables
 
-The upstream Slurm script `01_make_TE_AUC_primary.sbatch` starts from the unsplit Bowtie2 BAM files and retains primary mapped alignments with:
+The upstream Slurm script `01_make_TE_AUC_primary.sbatch` starts from the unsplit Bowtie2 BAM files and retains primary-mapped alignments with:
 
 ```bash
 samtools view -F 2308
 ```
 
 This excludes:
-
 - unmapped alignments (`0x4`)
 - secondary alignments (`0x100`)
 - supplementary alignments (`0x800`)
 
-The normalization denominator is the number of retained primary mapped alignments:
+The normalization denominator is the number of retained primary-mapped alignments:
 
 ```bash
 samtools view -c -F 2308 SAMPLE.bam
@@ -43,14 +42,7 @@ repeat_AUC_primary/<sample>.repeat_AUC.tsv
 with columns:
 
 ```text
-chr
-start
-end
-TE_name
-TE_class
-TE_strand
-RepeatMasker_label
-AUC
+chr start end TE_name TE_class TE_strand RepeatMasker_label AUC
 ```
 
 ## 2. Replicate and control averaging
@@ -79,7 +71,7 @@ patient > 0 and HC = 0  -> +Inf
 patient = 0 and HC > 0  -> -Inf
 ```
 
-For construction of the weighted distribution, infinite values are represented at the fixed limits `-8` and `+8`.
+For downstream visualization, infinite values are represented at the fixed limits `-8` and `+8`.
 
 ## 3. TE categories
 
@@ -93,27 +85,13 @@ ERV
 
 LINE and SINE are assigned from the broad `TE_class` field. ERV intervals are identified from RepeatMasker labels containing `ERV` (case-insensitive).
 
-## 4. AUC-weighted regional log2FC distribution
+## 4. Regional log2FC analysis
 
-Each RepeatMasker region is weighted by its mean signal across patient and control:
+For each patient sample, regional log2FC values are calculated relative to the averaged healthy controls.
 
-```text
-weight = (patient_AUC + HC_AUC) / 2
-```
+LINE, SINE, and ERV are analyzed separately using the same processing procedures.
 
-For each sample and TE category, the weighted distribution of region-level log2FC is accumulated from `-8` to `+8` using 0.2-log2FC bins.
-
-The category score is calculated from a symmetric pair of AUC-weighted quantiles:
-
-```text
-score = weighted_Q0.61(region_log2FC) + weighted_Q0.39(region_log2FC)
-```
-
-Here, this symmetric quantile pair was selected through systematic comparison of multiple AUC-weighted distribution summaries and paired-quantile parameters. The selected value fell within a broad region of similar performance (approximately q = 0.58–0.66), indicating that the resulting pattern was not dependent on a narrowly tuned quantile.
-
-The identical calculation and parameters are applied to LINE, SINE, and ERV.
-
-The resulting value is referred to as the **AUC-weighted log2FC quantile score**. It is derived from regional log2 fold changes and should not be interpreted as a conventional class-level log2 fold change.
+The resulting data allow comparisons of RepeatMasker-region changes across samples and tissues.
 
 ## 5. Heatmap
 
@@ -123,7 +101,7 @@ For visualization only:
 - the heatmap scale is fixed from 0 to 9
 - the color map is `Reds`
 - HC1 and HC2 are displayed as 0
-- the underlying TSV output retains the original signed scores
+- the underlying TSV output retains the original signed values
 
 ## 6. Expected input naming
 
@@ -153,17 +131,17 @@ The analysis checks for ambiguous cases in which both naming styles exist for th
 
 ## 7. Outputs
 
-The Jupyter analysis writes:
+The Jupyter analysis generates numerical tables and heatmaps for plasma and PBMC samples.
 
 ```text
-AuC_out/AUC_weighted_quantile/
-├── plasma.AUC_weighted_quantile_score.tsv
-├── PBMC.AUC_weighted_quantile_score.tsv
-├── all_samples.AUC_weighted_quantile_score.tsv
-└── plasma_PBMC.AUC_weighted_quantile_score.heatmap.png
+AuC_out/
+├── plasma.repeat_analysis.tsv
+├── PBMC.repeat_analysis.tsv
+├── all_samples.repeat_analysis.tsv
+└── plasma_PBMC.repeat_analysis.heatmap.png
 ```
 
-The TSV files contain the numerical scores used for downstream analysis. Negative values are retained in these tables even though they are displayed as white in the red-only heatmap.
+The TSV files contain the numerical results used for downstream analysis. Negative values are retained in these tables even though they are displayed as white in the red-only heatmap.
 
 ## 8. Python requirements
 
@@ -175,10 +153,13 @@ matplotlib
 ```
 
 ## 9. Repbase annotation file
-The Repbase annotation file needed in step 02 is too large to upload for Github. You can download it here from our google drive (anyone with the link can download): 
+
+The Repbase annotation file needed in step 02 is too large to upload to GitHub. It can be downloaded from our Google Drive (anyone with the link can download):
+
 https://drive.google.com/file/d/1yQtQWtg-UbY7B8iZSrHm05SUwmYZZ4T5/view?usp=sharing
 
 ## Reproducibility
 
-The upstream primary-mapping AUC calculation, the RepeatMasker BED file, and the downstream AUC-weighted quantile analysis should be kept together so the complete workflow can be reproduced from the original BAM files.
-For the jupyter code, you can edit/modify the heatmaps to include more or fewer groups, or shuffle the orders, but the numbers are the same.
+The upstream primary-mapping AUC calculation, RepeatMasker BED file, and downstream regional analysis should be kept together so the complete workflow can be reproduced from the original BAM files.
+
+The Jupyter code allows customization of heatmaps, including adding or removing TE groups and rearranging sample order. These visualization changes do not affect the underlying numerical results.
